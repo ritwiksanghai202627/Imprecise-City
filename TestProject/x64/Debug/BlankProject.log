@@ -1,0 +1,6 @@
+﻿  Renderer.cpp
+C:\Scratch\CSC8502 GLTF\Blank Project\Renderer.h(26,21): warning C4244: 'initializing': conversion from 'float' to 'int', possible loss of data
+  (compiling source file 'Renderer.cpp')
+  
+C:\Scratch\CSC8502 GLTF\Blank Project\Renderer.cpp(80,42): warning C4267: 'argument': conversion from 'size_t' to 'GLsizei', possible loss of data
+  BlankProject.vcxproj -> C:\Scratch\CSC8502 GLTF\x64\Debug\Blank Project.exe

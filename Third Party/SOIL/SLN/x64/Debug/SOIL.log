@@ -1,0 +1,29 @@
+﻿cl : command line  warning D9035: option 'Gm' has been deprecated and will be removed in a future release
+  stb_image_aug.c
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\include\SOIL\stbi_DDS_aug_c.h(362,19): warning C4018: '>': signed/unsigned mismatch
+  (compiling source file '../Simple%20OpenGL%20Image%20Library/src/stb_image_aug.c')
+  
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\include\SOIL\stbi_DDS_aug_c.h(366,19): warning C4018: '>': signed/unsigned mismatch
+  (compiling source file '../Simple%20OpenGL%20Image%20Library/src/stb_image_aug.c')
+  
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\include\SOIL\stbi_DDS_aug_c.h(390,19): warning C4018: '<': signed/unsigned mismatch
+  (compiling source file '../Simple%20OpenGL%20Image%20Library/src/stb_image_aug.c')
+  
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\include\SOIL\stbi_DDS_aug_c.h(427,19): warning C4018: '<': signed/unsigned mismatch
+  (compiling source file '../Simple%20OpenGL%20Image%20Library/src/stb_image_aug.c')
+  
+  SOIL.c
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\SOIL.c(1720,36): warning C4018: '<=': signed/unsigned mismatch
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\SOIL.c(1730,19): warning C4018: '<': signed/unsigned mismatch
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\SOIL.c(1868,39): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\SOIL.c(1842,6): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+  image_helper.c
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_helper.c(325,17): warning C4244: 'initializing': conversion from 'double' to 'float', possible loss of data
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_helper.c(366,13): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_helper.c(373,20): warning C4244: '=': conversion from 'float' to 'int', possible loss of data
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_helper.c(415,13): warning C4244: '=': conversion from 'double' to 'float', possible loss of data
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_helper.c(422,20): warning C4244: '=': conversion from 'float' to 'int', possible loss of data
+  image_DXT.c
+C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\Simple OpenGL Image Library\src\image_DXT.c(92,9): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+  Generating Code...
+  SOIL.vcxproj -> C:\Code\CSC8502 2026 old codebase\Third Party\SOIL\SLN\x64\Debug\SOIL.lib
