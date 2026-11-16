@@ -64,6 +64,7 @@
 *.pidb
 *.svclog
 *.scc
+*.exe.recipe
 
 # VS Code files for those working on multiple tools
 .vscode/*
