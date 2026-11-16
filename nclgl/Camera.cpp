@@ -18,7 +18,7 @@ void Camera::UpdateCamera(float msec)	{
 		yaw -= 360.0f;
 	}
 
-	msec *= 5.0f;
+	msec *= 1000.0f;
 
 	if (Window::GetMouse()->ButtonDown(MOUSE_FOUR)) {
 		msec *= 5.0f;

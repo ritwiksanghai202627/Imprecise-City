@@ -28,6 +28,7 @@ MeshMaterial::MeshMaterial(const std::string& filename) {
 	int meshCount;
 	file >> matCount;
 	file >> meshCount;
+	file.ignore();
 
 	materialLayers.resize(matCount);
 

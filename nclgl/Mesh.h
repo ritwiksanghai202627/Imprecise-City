@@ -107,6 +107,15 @@ public:
 	void SetJointParents(const std::vector<int>& newParents);
 	void SetBindPose(const std::vector<Matrix4>& newMats);
 	void SetInverseBindPose(const std::vector<Matrix4>& newMats);
+	
+	void GenerateNormals();
+	bool GetVertexIndicesForTri(unsigned int i, unsigned int &a, unsigned int &b, unsigned int &c) const;
+
+	void GenerateTangents();
+	Vector4 GenerateTangent(int a, int b, int c);
+
+	static Mesh* GenerateTriangle();
+	static Mesh* GenerateQuad();
 
 protected:
 	void	BufferData();

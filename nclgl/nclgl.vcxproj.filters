@@ -37,6 +37,11 @@
     </ClCompile>
     <ClCompile Include="Extra\OGLTexture.cpp" />
     <ClCompile Include="Camera.cpp" />
+    <ClCompile Include="SceneNode.cpp" />
+    <ClCompile Include="CubeRobot.cpp" />
+    <ClCompile Include="Plane.cpp" />
+    <ClCompile Include="Frustum.cpp" />
+    <ClCompile Include="HeightMap.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h" />
@@ -91,6 +96,12 @@
     </ClInclude>
     <ClInclude Include="Extra\OGLTexture.h" />
     <ClInclude Include="Camera.h" />
+    <ClInclude Include="SceneNode.h" />
+    <ClInclude Include="CubeRobot.h" />
+    <ClInclude Include="Plane.h" />
+    <ClInclude Include="Frustum.h" />
+    <ClInclude Include="HeightMap.h" />
+    <ClInclude Include="Light.h" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="GLAD">
