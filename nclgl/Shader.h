@@ -51,6 +51,8 @@ protected:
 	void	SetDefaultAttributes();
 	void	LinkProgram();
 
+	static bool Preprocessor(std::string& shaderFile);
+
 	GLuint	programID;
 	GLuint	objectIDs[SHADER_MAX];
 	GLint	programValid;

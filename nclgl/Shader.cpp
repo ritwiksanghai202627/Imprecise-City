@@ -1,6 +1,7 @@
 #include "Shader.h"
 #include "Mesh.h"
 #include <iostream>
+#include <set>
 
 using std::string;
 using std::cout;
@@ -60,6 +61,73 @@ void	Shader::Reload(bool deleteOld) {
 	PrintLinkLog(programID);
 }
 
+bool ReadTextFile(const std::string& filepath, std::string& result) {
+	std::ifstream file(filepath, std::ios::in);
+	if (file) {
+		std::ostringstream stream;
+
+		stream << file.rdbuf();
+
+		result = stream.str();
+
+		return true;
+	}
+	else {
+		std::cout << __FUNCTION__ << " can't read file " << filepath << "\n";
+		return false;
+	}
+}
+
+
+bool	Shader::Preprocessor(string& shaderFile) {
+	size_t lineStart = 0;
+	size_t lineEnd = 0;
+
+	std::set<std::string> includes;
+
+	while (true) {
+		lineEnd = shaderFile.find('\n', lineStart);
+		if (lineEnd == string::npos) {
+			return true;
+		}
+
+		size_t lineLength = lineEnd - lineStart;
+
+		std::string_view substr = std::string_view(shaderFile).substr(lineStart, lineLength);
+
+		size_t hasComment = substr.find("//");
+		size_t hasInclude = substr.find("#include");
+
+		if (hasComment == string::npos && hasInclude != string::npos) {
+			size_t nameStart = substr.find_first_of("\"");
+			size_t nameEnd = substr.find_last_of("\"");
+
+			std::string filename = std::string(substr.substr(nameStart + 1, nameEnd - nameStart - 1));
+
+			auto search = includes.find(filename);
+
+			if (search != includes.end()) {
+				std::cout << __FUNCTION__ << ": Preprocessor failure! Recursive inclusion of file " << filename << "\n";
+				return false;
+			}
+
+			includes.insert(filename);
+
+			std::string newFile;
+			if (!ReadTextFile(SHADERDIR + filename, newFile)) {
+				std::cout << __FUNCTION__ << ": Preprocessor failure! No include file " << filename << " can be found.\n";
+				return false;
+			}
+			else {
+				shaderFile.replace(lineStart, lineLength, newFile);
+				continue; //Don't move on, the replaced file could have additional includes!
+			}
+		}
+		lineStart = lineEnd + 1;
+	}
+	return true;
+}
+
 bool	Shader::LoadShaderFile(const string& filename, string &into)	{
 	ifstream	file(SHADERDIR + filename);
 	string		textLine;
@@ -91,6 +159,7 @@ void	Shader::GenerateShaderObject(unsigned int i)	{
 		shaderValid[i] = false;
 		return;
 	}
+	Preprocessor(shaderText);
 
 	objectIDs[i] = glCreateShader(shaderTypes[i]);
 
