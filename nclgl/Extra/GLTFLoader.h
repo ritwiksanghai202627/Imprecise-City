@@ -34,7 +34,7 @@ class Texture;
 enum GLTFAlphaMode {
 	Opaque,
 	Mask,
-	Cutoff
+	Blend
 };
 
 struct GLTFMaterialLayer {
@@ -60,16 +60,18 @@ struct GLTFMaterial {
 };		
 
 struct GLTFNode {
+	static const int32_t NO_MESH	= -1;
+	static const int32_t NO_PARENT	= -1;
+
 	std::string name;
 	uint32_t nodeID = 0;
 
-	::Mesh* mesh = nullptr;
-	//GLTFMaterial* material = nullptr;
+	int32_t meshID = NO_MESH;
 
 	Matrix4 localMatrix;
 	Matrix4 worldMatrix;
 
-	int32_t parent = -1;
+	int32_t parent = NO_PARENT;
 	std::vector<int32_t> children;
 };	
 

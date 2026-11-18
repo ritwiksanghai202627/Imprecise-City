@@ -222,16 +222,28 @@ void GLTFLoader::LoadImages(tinygltf::Model& m, GLTFScene& scene, BaseState stat
 	}
 }
 
-void GLTFLoader::LoadMaterials(tinygltf::Model& m, GLTFScene& scene, BaseState state) {
-	scene.materialLayers.reserve(scene.materialLayers.size() + m.materials.size());
-	for (const auto& m : m.materials) {
+void GLTFLoader::LoadMaterials(tinygltf::Model& model, GLTFScene& scene, BaseState state) {
+	scene.materialLayers.reserve(scene.materialLayers.size() + model.materials.size());
+
+	auto TexFetch = [&](int32_t index) ->SharedTexture {
+		if (index < 0) {
+			return nullptr;
+		}
+		int source = model.textures[index].source;
+		int realIndex = state.firstTex + source;
+
+		return scene.textures[realIndex];
+	};
+
+	for (const auto& m : model.materials) {
 		GLTFMaterialLayer layer;
-		layer.albedo	= m.pbrMetallicRoughness.baseColorTexture.index			>= 0 ? scene.textures[state.firstTex + m.pbrMetallicRoughness.baseColorTexture.index]		  : nullptr;
-		layer.metallic	= m.pbrMetallicRoughness.metallicRoughnessTexture.index >= 0 ? scene.textures[state.firstTex + m.pbrMetallicRoughness.metallicRoughnessTexture.index] : nullptr;
+
+		layer.albedo	= TexFetch(m.pbrMetallicRoughness.baseColorTexture.index);
+		layer.metallic	= TexFetch(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
 			
-		layer.bump		= m.normalTexture.index		>= 0 ? scene.textures[state.firstTex + m.normalTexture.index]	 : nullptr;
-		layer.occlusion = m.occlusionTexture.index	>= 0 ? scene.textures[state.firstTex + m.occlusionTexture.index] : nullptr;
-		layer.emission	= m.emissiveTexture.index	>= 0 ? scene.textures[state.firstTex + m.emissiveTexture.index]  : nullptr;
+		layer.bump		= TexFetch(m.normalTexture.index);
+		layer.occlusion = TexFetch(m.occlusionTexture.index); 
+		layer.emission	= TexFetch(m.emissiveTexture.index);
 
 		layer.metallicFactor	= (float)m.pbrMetallicRoughness.metallicFactor;
 		layer.roughnessFactor	= (float)m.pbrMetallicRoughness.roughnessFactor;
@@ -244,8 +256,8 @@ void GLTFLoader::LoadMaterials(tinygltf::Model& m, GLTFScene& scene, BaseState s
 			else if (m.alphaMode == "OPAQUE") {
 				layer.alphaMode = GLTFAlphaMode::Opaque;
 			}
-			else if (m.alphaMode == "CUTOFF") {
-				layer.alphaMode = GLTFAlphaMode::Cutoff;
+			else if (m.alphaMode == "BLEND") {
+				layer.alphaMode = GLTFAlphaMode::Blend;
 			}
 		}
 
@@ -373,9 +385,9 @@ void GLTFLoader::LoadVertexData(tinygltf::Model& model, GLTFScene& scene, BaseSt
 			submeshes
 		);
 
-		SharedMesh mesh = std::make_shared<OGLMesh>(*outMesh);
+		SharedMesh m = std::make_shared<OGLMesh>(*outMesh);
 
-		scene.meshes.push_back(mesh);
+		scene.meshes.push_back(m);
 		scene.materials.push_back(material);
 	}
 }
@@ -386,7 +398,8 @@ void GLTFLoader::AssignNodeMeshes(tinygltf::Model& model, GLTFScene& scene, Base
 		auto& fileNode  = model.nodes[i];
 
 		if (fileNode.mesh >= 0) {
-			sceneNode.mesh = scene.meshes[state.firstMesh + fileNode.mesh].get();
+			//sceneNode.mesh = scene.meshes[state.firstMesh + fileNode.mesh].get();
+			sceneNode.meshID = state.firstMesh + fileNode.mesh;
 		}
 		if (fileNode.skin >= 0) {
 			auto& skin = model.skins[fileNode.skin];
@@ -468,8 +481,8 @@ void GLTFLoader::LoadSkinningData(tinygltf::Model& model, GLTFScene& scene, int3
 	auto& skin		= model.skins[skinID];
 	auto& sceneNode = scene.sceneNodes[state.firstNode + meshNode];
 
-	assert(sceneNode.mesh);
-	OGLMesh& mesh = *sceneNode.mesh;
+	assert(sceneNode.meshID >= 0);
+	OGLMesh& mesh = *scene.meshes[sceneNode.meshID];
 
 	GLTFSkin skinData;
 
