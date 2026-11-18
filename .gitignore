@@ -1,4 +1,6 @@
 .vs/
+nclgl/x64/Debug/
+Imprecise City/x64/Debug/
 
 # Prerequisites
 *.d
