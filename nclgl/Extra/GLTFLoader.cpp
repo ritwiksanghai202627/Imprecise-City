@@ -385,9 +385,9 @@ void GLTFLoader::LoadVertexData(tinygltf::Model& model, GLTFScene& scene, BaseSt
 			submeshes
 		);
 
-		SharedMesh m = std::make_shared<OGLMesh>(*outMesh);
+		SharedMesh mesh = std::make_shared<OGLMesh>(*outMesh);
 
-		scene.meshes.push_back(m);
+		scene.meshes.push_back(mesh);
 		scene.materials.push_back(material);
 	}
 }
