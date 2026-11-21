@@ -5,7 +5,8 @@
 
 ProceduralMesh::ProceduralMesh(const std::vector<Vector3>& positions,
                                const std::vector<Vector2>& texCoords,
-                               const std::vector<unsigned int>& triangleIndices) {
+                               const std::vector<unsigned int>& triangleIndices,
+                               const std::vector<Vector3>* normalsIn) {
 	assert(positions.size() == texCoords.size());
 
 	numVertices = static_cast<GLuint>(positions.size());
@@ -20,6 +21,13 @@ ProceduralMesh::ProceduralMesh(const std::vector<Vector3>& positions,
 	std::copy(texCoords.begin(), texCoords.end(), textureCoords);
 	std::copy(triangleIndices.begin(), triangleIndices.end(), indices);
 
-	GenerateNormals();   // must come before BufferData, which uploads whichever arrays exist
+	if (normalsIn) {
+		assert(normalsIn->size() == positions.size());
+		normals = new Vector3[numVertices];
+		std::copy(normalsIn->begin(), normalsIn->end(), normals);
+	}
+	else {
+		GenerateNormals();   // must come before BufferData, which uploads whichever arrays exist
+	}
 	BufferData();
 }

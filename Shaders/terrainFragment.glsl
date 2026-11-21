@@ -19,7 +19,9 @@ void main(void) {
 	vec3  N     = normalize(IN.normal);
 	float slope = 1.0 - N.y;          // 0 = flat ground, towards 1 = cliff
 
-	vec3 grass = texture(grassTex, IN.texCoord).rgb;
+	// Two samples at unrelated scales hide the repeat of a single tiling texture.
+	vec3 grass = 0.6 * texture(grassTex, IN.texCoord).rgb
+	           + 0.4 * texture(grassTex, IN.texCoord * 0.173 + vec2(0.37, 0.11)).rgb;
 	vec3 sand  = texture(sandTex,  IN.texCoord).rgb;
 	vec3 rock  = texture(rockTex,  IN.texCoord).rgb;
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <vector>
 
@@ -59,6 +60,8 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 		return;   // init stays false, so main() exits cleanly
 	}
 
+	BuildScene();
+
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
 	glGenBuffers(1, &frameUBO);
 	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
@@ -90,6 +93,47 @@ Renderer::~Renderer() {
 	glDeleteBuffers(1, &frameUBO);
 }
 
+// The scene graph:
+//   root
+//   +-- terrain (group, no mesh)
+//   |     +-- 64 terrain chunks (each with its own bounding sphere)
+//   +-- road
+//   +-- car
+//   +-- sea (transparent list)
+// Only nodes with a mesh are drawn or culled. Grouping nodes exist so later batches can
+// hang things (wheels on the car, buildings in a district) off one parent transform.
+void Renderer::BuildScene() {
+	root = std::make_unique<SceneNode>();
+
+	SceneNode* terrainGroup = new SceneNode();
+	root->AddChild(terrainGroup);
+	for (const Terrain::Chunk& chunk : terrain->GetChunks()) {
+		SceneObject* node = new SceneObject(chunk.mesh.get(), Material::Terrain);
+		node->SetTransform(Matrix4::Translation(chunk.centre));   // chunk vertices are centre-relative
+		node->SetBoundingRadius(chunk.radius);
+		terrainGroup->AddChild(node);
+	}
+
+	// The road is one mesh for now; a bounding sphere around the origin covers all of it.
+	SceneObject* roadNode = new SceneObject(roadMesh.get(), Material::Road);
+	roadNode->SetBoundingRadius(800.0f);
+	root->AddChild(roadNode);
+
+	// Assumes Cube.msh spans -1..1, so this is a 2 x 1.2 x 4.4 box. Transform set every frame.
+	carNode = new SceneObject(carMesh.get(), Material::Lit, Vector4(0.75f, 0.08f, 0.08f, 1.0f));
+	carNode->SetModelScale(Vector3(1.0f, 0.6f, 2.2f));
+	carNode->SetBoundingRadius(3.0f);
+	root->AddChild(carNode);
+
+	// The sea quad is rotated flat and scaled huge; it has no alpha yet, but it lives in the
+	// transparent list so sorting and blending are already in place when the water gets alpha.
+	SceneObject* seaNode = new SceneObject(seaMesh.get(), Material::Sea, Vector4(1, 1, 1, 1), true);
+	seaNode->SetTransform(Matrix4::Rotation(-90.0f, Vector3(1, 0, 0)));
+	seaNode->SetModelScale(Vector3(8000.0f, 8000.0f, 1.0f));
+	seaNode->SetBoundingRadius(12000.0f);
+	root->AddChild(seaNode);
+}
+
 GLuint Renderer::LoadTexture(const std::string& fileName) {
 	const std::string path = std::string(TEXTUREDIR) + fileName;
 	GLuint tex = SOIL_load_OGL_texture(path.c_str(), SOIL_LOAD_AUTO, SOIL_CREATE_NEW_ID, SOIL_FLAG_MIPMAPS);
@@ -106,10 +150,6 @@ void Renderer::Use(Shader& shader) {
 	activeProgram = shader.GetProgram();
 }
 
-void Renderer::SetModelMatrix(const Matrix4& m) {
-	glUniformMatrix4fv(glGetUniformLocation(activeProgram, "modelMatrix"), 1, false, m.values);
-}
-
 void Renderer::UpdateScene(float /*dt*/) {
 	const auto now = std::chrono::steady_clock::now();
 	const float dt = std::min(std::chrono::duration<float>(now - lastTick).count(), 0.1f);
@@ -119,23 +159,45 @@ void Renderer::UpdateScene(float /*dt*/) {
 	if (Window::GetKeyboard()->KeyTriggered(KEYBOARD_C)) {
 		SwitchCameraMode();
 	}
+	if (Window::GetKeyboard()->KeyTriggered(KEYBOARD_F)) {
+		cullingFrozen = !cullingFrozen;
+	}
+
+	UpdateCar(dt);
 
 	if (cameraMode == CameraMode::Cinematic) {
-		UpdateCinematicCamera(dt);
+		UpdateCinematicCamera();
 	}
 	else {
 		UpdateFreeCamera(dt);
 	}
 
 	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, 60.0f);
+
+	root->Update(dt);   // recomputes every node's world transform from its parent's
+
+	if (!cullingFrozen) {
+		cullFrustum.FromMatrix(projMatrix * viewMatrix);
+	}
+
+	UpdateWindowTitle(dt);
 }
 
-void Renderer::UpdateCinematicCamera(float dt) {
+void Renderer::UpdateCar(float dt) {
 	carDistance += kCarSpeed * dt;
 	if (carDistance > road->GetLength() - 30.0f) {
 		carDistance = 0.0f;   // loop for now
 	}
 
+	const Vector3 pos = road->PositionAt(carDistance);
+	const Vector3 dir = road->DirectionAt(carDistance);
+	carNode->SetTransform(
+		Matrix4::Translation(pos + Vector3(0.0f, 0.65f, 0.0f)) *
+		Matrix4::Rotation(YawFromDirection(dir), Vector3(0, 1, 0)) *
+		Matrix4::Rotation(PitchFromDirection(dir), Vector3(1, 0, 0)));
+}
+
+void Renderer::UpdateCinematicCamera() {
 	eyePosition = road->PositionAt(carDistance - kCamBehind) + Vector3(0.0f, kCamHeight, 0.0f);
 	lookTarget  = road->PositionAt(carDistance + kLookAhead) + Vector3(0.0f, kLookHeight, 0.0f);
 	viewMatrix  = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
@@ -166,12 +228,30 @@ void Renderer::SwitchCameraMode() {
 		camera.SetYaw(YawFromDirection(f));
 		camera.SetPitch(PitchFromDirection(f));
 		cameraMode = CameraMode::Free;
-		std::cout << "Camera: free\n";
 	}
 	else {
 		cameraMode = CameraMode::Cinematic;
-		std::cout << "Camera: cinematic\n";
 	}
+}
+
+void Renderer::UpdateWindowTitle(float dt) {
+	titleTimer += dt;
+	++titleFrames;
+	if (titleTimer < 0.5f) {
+		return;
+	}
+	char title[256];
+	std::snprintf(title, sizeof(title),
+		"Grand Theft const auto& : Imprecise City | %.0f fps (%.1f ms) | nodes %u/%u | draws %u | tris %u | cull %s | cam %s",
+		titleFrames / titleTimer, 1000.0f * titleTimer / titleFrames,
+		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.triangles,
+		cullingFrozen ? "FROZEN" : "live",
+		cameraMode == CameraMode::Cinematic ? "cinematic" : "free");
+	if (HWND window = GetActiveWindow()) {
+		SetWindowTextA(window, title);
+	}
+	titleTimer  = 0.0f;
+	titleFrames = 0;
 }
 
 void Renderer::UploadFrameData() {
@@ -184,48 +264,127 @@ void Renderer::UploadFrameData() {
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameData), &frameData);
 }
 
+// Walks the graph once. A node is kept only if its bounding sphere touches the frustum;
+// the kept nodes go into one of two lists, because opaque and transparent objects need
+// opposite sort orders.
+void Renderer::BuildNodeLists(SceneNode* node) {
+	if (node->GetMesh()) {
+		++stats.nodesTotal;
+		if (cullFrustum.InsideFrustum(*node)) {
+			++stats.nodesDrawn;
+
+			// Squared distance is enough for ordering and skips the square root.
+			const Vector3 d = node->GetWorldTransform().GetPositionVector() - eyePosition;
+			node->SetCameraDistance(d.x * d.x + d.y * d.y + d.z * d.z);
+
+			SceneObject* object = static_cast<SceneObject*>(node);   // valid: see SceneObject.h
+			(object->IsTransparent() ? transparentList : opaqueList).push_back(object);
+		}
+	}
+	for (auto i = node->GetChildIteratorStart(); i != node->GetChildIteratorEnd(); ++i) {
+		BuildNodeLists(*i);
+	}
+}
+
+void Renderer::SortNodeLists() {
+	// Opaque: group by material (fewest shader switches), then nearest first so the depth
+	// test rejects hidden fragments before the fragment shader runs (early-z).
+	std::sort(opaqueList.begin(), opaqueList.end(), [](const SceneObject* a, const SceneObject* b) {
+		if (a->GetMaterial() != b->GetMaterial()) {
+			return a->GetMaterial() < b->GetMaterial();
+		}
+		return a->GetCameraDistance() < b->GetCameraDistance();
+	});
+
+	// Transparent: farthest first, so nearer surfaces blend over farther ones correctly.
+	std::sort(transparentList.begin(), transparentList.end(), [](const SceneObject* a, const SceneObject* b) {
+		return a->GetCameraDistance() > b->GetCameraDistance();
+	});
+}
+
+void Renderer::ClearNodeLists() {
+	opaqueList.clear();
+	transparentList.clear();
+}
+
+void Renderer::BindMaterial(Material material) {
+	if (materialBound && material == boundMaterial) {
+		return;
+	}
+
+	switch (material) {
+		case Material::Terrain:
+			Use(*terrainShader);
+			glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, grassTexture);
+			glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, sandTexture);
+			glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, rockTexture);
+			break;
+		case Material::Road: Use(*roadShader); break;
+		case Material::Lit:  Use(*litShader);  break;
+		case Material::Sea:  Use(*seaShader);  break;
+	}
+
+	// Pull the road slightly toward the camera so it never z-fights the terrain under it.
+	if (material == Material::Road) {
+		glEnable(GL_POLYGON_OFFSET_FILL);
+		glPolygonOffset(-1.0f, -1.0f);
+	}
+	else {
+		glDisable(GL_POLYGON_OFFSET_FILL);
+	}
+
+	// Uniform locations are fixed per program, so look them up here, not per draw.
+	modelLoc  = glGetUniformLocation(activeProgram, "modelMatrix");
+	colourLoc = glGetUniformLocation(activeProgram, "baseColour");   // -1 if the shader has none
+
+	boundMaterial = material;
+	materialBound = true;
+}
+
+void Renderer::DrawNode(SceneObject* node) {
+	BindMaterial(node->GetMaterial());
+
+	const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
+	glUniformMatrix4fv(modelLoc, 1, false, model.values);
+	if (colourLoc >= 0) {
+		const Vector4 colour = node->GetColour();
+		glUniform4f(colourLoc, colour.x, colour.y, colour.z, colour.w);
+	}
+
+	node->Draw(*this);
+
+	++stats.drawCalls;
+	stats.triangles += node->GetMesh()->GetTriCount();
+}
+
+void Renderer::DrawNodes(const std::vector<SceneObject*>& list) {
+	for (SceneObject* node : list) {
+		DrawNode(node);
+	}
+}
+
 void Renderer::RenderScene() {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 	UploadFrameData();
 
-	StartDebugGroup("Terrain");
-	Use(*terrainShader);
-	SetModelMatrix(Matrix4());
-	glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, grassTexture);
-	glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, sandTexture);
-	glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, rockTexture);
-	terrain->GetMesh()->Draw();
+	stats = FrameStats();
+	materialBound = false;
+
+	StartDebugGroup("Scene culling and sorting");
+	BuildNodeLists(root.get());
+	SortNodeLists();
 	EndDebugGroup();
 
-	StartDebugGroup("Road");
-	Use(*roadShader);
-	SetModelMatrix(Matrix4());
-	glEnable(GL_POLYGON_OFFSET_FILL);   // pull the road slightly toward the camera so it never z-fights the terrain
-	glPolygonOffset(-1.0f, -1.0f);
-	roadMesh->Draw();
-	glDisable(GL_POLYGON_OFFSET_FILL);
+	StartDebugGroup("Opaque pass");
+	DrawNodes(opaqueList);
 	EndDebugGroup();
 
-	StartDebugGroup("Vehicle");
-	{
-		Use(*litShader);
-		const Vector3 pos = road->PositionAt(carDistance);
-		const Vector3 dir = road->DirectionAt(carDistance);
-		// Assumes Cube.msh spans -1..1, so this is a 2 x 1.2 x 4.4 box.
-		const Matrix4 model =
-			Matrix4::Translation(pos + Vector3(0.0f, 0.65f, 0.0f)) *
-			Matrix4::Rotation(YawFromDirection(dir), Vector3(0, 1, 0)) *
-			Matrix4::Rotation(PitchFromDirection(dir), Vector3(1, 0, 0)) *
-			Matrix4::Scale(Vector3(1.0f, 0.6f, 2.2f));
-		SetModelMatrix(model);
-		glUniform4f(glGetUniformLocation(activeProgram, "baseColour"), 0.75f, 0.08f, 0.08f, 1.0f);
-		carMesh->Draw();
-	}
+	StartDebugGroup("Transparent pass");
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	DrawNodes(transparentList);
+	glDisable(GL_BLEND);
 	EndDebugGroup();
 
-	StartDebugGroup("Sea");   // last, so it can become transparent later
-	Use(*seaShader);
-	SetModelMatrix(Matrix4::Rotation(-90.0f, Vector3(1, 0, 0)) * Matrix4::Scale(Vector3(8000.0f, 8000.0f, 1.0f)));
-	seaMesh->Draw();
-	EndDebugGroup();
+	ClearNodeLists();
 }

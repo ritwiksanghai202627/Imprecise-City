@@ -2,10 +2,13 @@
 
 #include "../nclgl/OGLRenderer.h"
 #include "../nclgl/Camera.h"
+#include "../nclgl/Frustum.h"
+#include "SceneObject.h"
 
 #include <chrono>
 #include <memory>
 #include <string>
+#include <vector>
 
 class Terrain;
 class RoadPath;
@@ -25,6 +28,14 @@ static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
 static_assert(sizeof(FrameData) == 2 * 64 + 5 * 16, "FrameData must match the std140 block in frame.glslh");
 
+// Per-frame counters, shown in the window title.
+struct FrameStats {
+	unsigned nodesTotal = 0;   // drawable nodes in the scene
+	unsigned nodesDrawn = 0;   // ...that survived culling
+	unsigned drawCalls  = 0;
+	unsigned triangles  = 0;
+};
+
 class Renderer : public OGLRenderer {
 public:
 	Renderer(Window& parent);
@@ -36,16 +47,24 @@ public:
 private:
 	enum class CameraMode { Cinematic, Free };
 
-	void   UpdateCinematicCamera(float dt);
+	// Scene graph
+	void BuildScene();
+	void BuildNodeLists(SceneNode* node);   // frustum test + split into opaque / transparent
+	void SortNodeLists();
+	void ClearNodeLists();
+	void DrawNodes(const std::vector<SceneObject*>& list);
+	void DrawNode(SceneObject* node);
+	void BindMaterial(Material material);
+
+	// Camera and per-frame
+	void   UpdateCinematicCamera();
 	void   UpdateFreeCamera(float dt);
 	void   SwitchCameraMode();
+	void   UpdateCar(float dt);
 	void   UploadFrameData();
+	void   UpdateWindowTitle(float dt);
 	GLuint LoadTexture(const std::string& fileName);
-
-	// Shader helpers. Matrices shared by every draw live in the frame UBO, so per draw
-	// we only set the model matrix.
-	void Use(Shader& shader);
-	void SetModelMatrix(const Matrix4& m);
+	void   Use(Shader& shader);
 
 	// Camera
 	Camera     camera;               // nclgl free-fly camera
@@ -53,7 +72,7 @@ private:
 	Vector3    eyePosition;
 	Vector3    lookTarget;
 
-	// World
+	// World data (meshes are owned here or by Terrain; scene nodes only point at them)
 	std::unique_ptr<RoadPath> road;
 	std::unique_ptr<Terrain>  terrain;
 	std::unique_ptr<Mesh>     roadMesh;
@@ -61,16 +80,36 @@ private:
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
 
+	// Scene graph: declared after the meshes, so it is destroyed before them
+	std::unique_ptr<SceneNode> root;
+	SceneObject*               carNode = nullptr;
+	std::vector<SceneObject*>  opaqueList;
+	std::vector<SceneObject*>  transparentList;
+
+	// Culling. The frustum is rebuilt every frame unless frozen (F), so you can fly out
+	// and see what the camera that was frozen could not see.
+	Frustum cullFrustum;
+	bool    cullingFrozen = false;
+
 	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
 	GLuint activeProgram = 0;
 
+	// Material binding cache (uniform locations are looked up once per material switch)
+	bool     materialBound = false;
+	Material boundMaterial = Material::Terrain;
+	GLint    modelLoc  = -1;
+	GLint    colourLoc = -1;
+
 	// Frame data
 	GLuint frameUBO = 0;
 	FrameData frameData;
 
-	// Time
+	// Time and stats
 	std::chrono::steady_clock::time_point lastTick;
-	float elapsedSeconds = 0.0f;
+	float      elapsedSeconds = 0.0f;
+	FrameStats stats;
+	float      titleTimer  = 0.0f;
+	int        titleFrames = 0;
 };

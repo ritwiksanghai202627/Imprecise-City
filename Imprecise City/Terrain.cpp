@@ -1,6 +1,7 @@
 #include "Terrain.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 
@@ -88,7 +89,7 @@ Terrain::Terrain(const RoadPath& road, int gridSize, float cellSize)
 	}
 
 	CarveRoad(road);
-	BuildMesh();
+	BuildChunks();
 }
 
 void Terrain::CarveRoad(const RoadPath& road) {
@@ -138,40 +139,91 @@ void Terrain::CarveRoad(const RoadPath& road) {
 	}
 }
 
-void Terrain::BuildMesh() {
-	std::vector<Vector3>      positions;
-	std::vector<Vector2>      texCoords;
-	std::vector<unsigned int> indices;
+Vector3 Terrain::NormalAt(int ix, int iz) const {
+	// Central differences on the full grid (clamped at the edges). Chunks call this with
+	// global indices, so two tiles sharing a border vertex get the identical normal.
+	auto h = [this](int x, int z) {
+		x = std::min(std::max(x, 0), gridSize - 1);
+		z = std::min(std::max(z, 0), gridSize - 1);
+		return heights[static_cast<size_t>(z) * gridSize + x];
+	};
+	const Vector3 n(h(ix - 1, iz) - h(ix + 1, iz), 2.0f * cellSize, h(ix, iz - 1) - h(ix, iz + 1));
+	return n * (1.0f / std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z));
+}
 
-	positions.reserve(heights.size());
-	texCoords.reserve(heights.size());
-	indices.reserve(static_cast<size_t>(gridSize - 1) * (gridSize - 1) * 6);
+void Terrain::BuildChunks() {
+	assert((gridSize - 1) % kCellsPerChunk == 0);
+	const int   cells          = kCellsPerChunk;
+	const int   chunksPerSide  = (gridSize - 1) / cells;
+	const int   vertsPerSide   = cells + 1;
+	const float uvPerUnit      = 1.0f / 24.0f;   // one texture repeat every 24 world units
 
-	const float uvPerUnit = 1.0f / 24.0f;   // one texture repeat every 24 world units
-
-	for (int z = 0; z < gridSize; ++z) {
-		for (int x = 0; x < gridSize; ++x) {
-			const float wx = x * cellSize - halfExtent;
-			const float wz = z * cellSize - halfExtent;
-			positions.push_back(Vector3(wx, heights[static_cast<size_t>(z) * gridSize + x], wz));
-			texCoords.push_back(Vector2(wx * uvPerUnit, wz * uvPerUnit));
-		}
-	}
-
-	// Each grid cell is two triangles. With a = (x,z), b = (x+1,z), c = (x,z+1), d = (x+1,z+1),
+	// Vertices are stored relative to the chunk centre, so every chunk has the same index list.
+	// Each grid cell is two triangles; with a = (x,z), b = (x+1,z), c = (x,z+1), d = (x+1,z+1),
 	// (a,c,b) and (b,c,d) are counter-clockwise seen from above, so the front face points up.
-	for (int z = 0; z < gridSize - 1; ++z) {
-		for (int x = 0; x < gridSize - 1; ++x) {
-			const unsigned int a = z * gridSize + x;
+	std::vector<unsigned int> indices;
+	indices.reserve(static_cast<size_t>(cells) * cells * 6);
+	for (int z = 0; z < cells; ++z) {
+		for (int x = 0; x < cells; ++x) {
+			const unsigned int a = z * vertsPerSide + x;
 			const unsigned int b = a + 1;
-			const unsigned int c = a + gridSize;
+			const unsigned int c = a + vertsPerSide;
 			const unsigned int d = c + 1;
 			indices.push_back(a); indices.push_back(c); indices.push_back(b);
 			indices.push_back(b); indices.push_back(c); indices.push_back(d);
 		}
 	}
 
-	mesh = std::make_unique<ProceduralMesh>(positions, texCoords, indices);
+	std::vector<Vector3> positions, normals;
+	std::vector<Vector2> texCoords;
+	const size_t vertCount = static_cast<size_t>(vertsPerSide) * vertsPerSide;
+	positions.reserve(vertCount); normals.reserve(vertCount); texCoords.reserve(vertCount);
+	chunks.reserve(static_cast<size_t>(chunksPerSide) * chunksPerSide);
+
+	for (int cz = 0; cz < chunksPerSide; ++cz) {
+		for (int cx = 0; cx < chunksPerSide; ++cx) {
+			const int x0 = cx * cells;
+			const int z0 = cz * cells;
+
+			float hMin = std::numeric_limits<float>::max();
+			float hMax = std::numeric_limits<float>::lowest();
+			for (int z = 0; z <= cells; ++z) {
+				for (int x = 0; x <= cells; ++x) {
+					const float h = heights[static_cast<size_t>(z0 + z) * gridSize + (x0 + x)];
+					hMin = std::min(hMin, h);
+					hMax = std::max(hMax, h);
+				}
+			}
+
+			const Vector3 centre((x0 + cells * 0.5f) * cellSize - halfExtent,
+			                     (hMin + hMax) * 0.5f,
+			                     (z0 + cells * 0.5f) * cellSize - halfExtent);
+
+			positions.clear(); normals.clear(); texCoords.clear();
+			for (int z = 0; z <= cells; ++z) {
+				for (int x = 0; x <= cells; ++x) {
+					const int   ix = x0 + x, iz = z0 + z;
+					const float wx = ix * cellSize - halfExtent;
+					const float wz = iz * cellSize - halfExtent;
+					const float h  = heights[static_cast<size_t>(iz) * gridSize + ix];
+
+					positions.push_back(Vector3(wx - centre.x, h - centre.y, wz - centre.z));
+					normals.push_back(NormalAt(ix, iz));
+					texCoords.push_back(Vector2(wx * uvPerUnit, wz * uvPerUnit));   // world-based, so tiling is continuous
+				}
+			}
+
+			// Sphere that encloses the tile's footprint (half-diagonal) and its height range.
+			const float half = cells * cellSize * 0.5f;
+			const float halfHeight = (hMax - hMin) * 0.5f;
+
+			Chunk chunk;
+			chunk.mesh   = std::make_unique<ProceduralMesh>(positions, texCoords, indices, &normals);
+			chunk.centre = centre;
+			chunk.radius = std::sqrt(2.0f * half * half + halfHeight * halfHeight);
+			chunks.push_back(std::move(chunk));
+		}
+	}
 }
 
 float Terrain::HeightAt(float x, float z) const {
