@@ -1,0 +1,19 @@
+// Lighting and fog helpers.
+// Needs the frame block and the support helpers to be included before this file.
+
+// One directional light (the sun) plus a cheap sky/ground ambient term.
+// N must be a unit vector.
+vec3 ApplyDirectional(vec3 albedo, vec3 N) {
+	float ndl           = saturate(dot(N, sunDir.xyz));
+	vec3  skyAmbient    = fogColour.rgb * 0.45;
+	vec3  groundAmbient = vec3(0.12, 0.11, 0.10);
+	vec3  ambient       = lerp(groundAmbient, skyAmbient, N.y * 0.5 + 0.5);
+	return albedo * (ambient + sunColour.rgb * sunDir.w * ndl);
+}
+
+// Exponential-squared fog: clear nearby, fades smoothly into the sky colour.
+vec3 ApplyFog(vec3 colour, float dist) {
+	float x = dist * fogColour.w;
+	float f = 1.0 - exp(-x * x);
+	return lerp(colour, fogColour.rgb, saturate(f));
+}
