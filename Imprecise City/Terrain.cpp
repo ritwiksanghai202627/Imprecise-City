@@ -93,8 +93,9 @@ Terrain::Terrain(const RoadPath& road, int gridSize, float cellSize)
 }
 
 void Terrain::CarveRoad(const RoadPath& road) {
-	const float flatHalfWidth = 14.0f;   // fully level out to here (road half-width 5 plus a cell of margin)
-	const float shoulderWidth = 48.0f;   // blends back to the natural terrain by here
+	const float flatHalfWidth = 16.0f;   // fully level out to here (road half-width 5 plus a cell of margin)
+	const float shoulderWidth = 52.0f;   // blends back to the natural terrain by here
+	const float roadBedOffset = -0.35f;
 	const int   radius = static_cast<int>(std::ceil(shoulderWidth / cellSize)) + 1;
 
 	// For every grid vertex remember the closest road sample and that sample's height.
@@ -134,7 +135,7 @@ void Terrain::CarveRoad(const RoadPath& road) {
 	for (size_t i = 0; i < count; ++i) {
 		if (nearest[i] < shoulderWidth) {
 			const float w = 1.0f - Smoothstep(flatHalfWidth, shoulderWidth, nearest[i]);
-			heights[i] += (roadHeight[i] - heights[i]) * w;
+			heights[i] += ((roadHeight[i] + roadBedOffset) - heights[i]) * w;
 		}
 	}
 }
