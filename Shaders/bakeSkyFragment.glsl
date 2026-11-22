@@ -21,5 +21,5 @@ vec3 CubeDirection(int f, vec2 uv) {
 }
 
 void main(void) {
-	fragColour = vec4(SkyColour(normalize(CubeDirection(face, faceUV))), 1.0);
+	fragColour = vec4(SkyColour(normalize(CubeDirection(face, faceUV)), 1.0), 1.0);
 }

@@ -244,7 +244,11 @@ float Terrain::HeightAt(float x, float z) const {
 	const float h01 = heights[static_cast<size_t>(iz + 1) * gridSize + ix];
 	const float h11 = heights[static_cast<size_t>(iz + 1) * gridSize + ix + 1];
 
-	const float top    = h00 + (h10 - h00) * fx;
-	const float bottom = h01 + (h11 - h01) * fx;
-	return top + (bottom - top) * fz;
+	// The mesh splits every cell along the b-c diagonal (see the index list above), so interpolate
+	// on the triangle the point is actually in. Plain bilinear differs from the drawn surface by up
+	// to tens of centimetres on slopes, which made characters float.
+	if (fx + fz <= 1.0f) {   // triangle (a, b, c)
+		return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
+	}
+	return h11 + (h01 - h11) * (1.0f - fx) + (h10 - h11) * (1.0f - fz);   // triangle (b, c, d)
 }

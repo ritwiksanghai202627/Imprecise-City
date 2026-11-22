@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <iostream>
 
 Matrix4 AnimatedModel::ZUpFix(float scale) {
@@ -19,6 +20,7 @@ Matrix4 AnimatedModel::YUpFix(float scale) {
 
 bool AnimatedModel::Load(const std::string& gltfPath, const Matrix4& fixMatrix) {
 	fix = fixMatrix;
+	const auto started = std::chrono::steady_clock::now();
 
 	if (!GLTFLoader::Load(gltfPath, scene)) {
 		std::cout << "AnimatedModel: could not load " << gltfPath << "\n";
@@ -43,6 +45,15 @@ bool AnimatedModel::Load(const std::string& gltfPath, const Matrix4& fixMatrix) 
 		          << " joints, the shader supports " << kMaxJoints << "\n";
 		return false;
 	}
+
+	// Report what was loaded, so model cost can be judged without opening a 3D tool.
+	const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	std::cout << "AnimatedModel: " << gltfPath << "\n    "
+	          << GetMesh()->GetTriCount() << " triangles, "
+	          << GetMesh()->GetJointCount() << " joints, "
+	          << GetMesh()->GetSubMeshCount() << " sub-meshes, "
+	          << scene.textures.size() << " textures, "
+	          << scene.animations.size() << " clip(s), loaded in " << ms << " ms\n";
 	return true;
 }
 

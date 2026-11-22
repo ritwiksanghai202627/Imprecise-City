@@ -251,11 +251,13 @@ void Renderer::BuildWalkers() {
 		return;
 	}
 
-	const float startDistance[4] = {  35.0f,  60.0f,  85.0f, 120.0f };
-	const float side[4]          = {   8.0f,  -8.0f,   9.0f,  -9.0f };
+	// Spread along the whole road, each with a long stretch to stroll (100 m each way at 1.3 m/s
+	// is over a minute before turning), so they do not bunch up and rarely reverse on camera.
+	const int   kWalkerCount = 5;
+	const float startDistance[kWalkerCount] = { 90.0f, 330.0f, 560.0f, 800.0f, 1050.0f };
 	const float duration = walkerModel->ClipDuration(0);
 
-	for (int i = 0; i < 4; ++i) {
+	for (int i = 0; i < kWalkerCount; ++i) {
 		// Different start times, so the walkers are not in lock-step.
 		SkinnedObject* node = new SkinnedObject(walkerModel.get(), 0, duration * 0.27f * i, 1.0f);
 		root->AddChild(node);
@@ -264,9 +266,9 @@ void Renderer::BuildWalkers() {
 		w.node        = node;
 		w.distance    = startDistance[i];
 		w.direction   = (i % 2 == 0) ? 1.0f : -1.0f;
-		w.minDistance = startDistance[i] - 25.0f;
-		w.maxDistance = startDistance[i] + 25.0f;
-		w.side        = side[i];
+		w.minDistance = std::max(5.0f, startDistance[i] - 100.0f);
+		w.maxDistance = startDistance[i] + 100.0f;
+		w.side        = (i % 2 == 0) ? 8.0f : -8.0f;
 		w.speed       = 1.3f;
 		walkers.push_back(w);
 	}
@@ -305,6 +307,14 @@ GLuint Renderer::LoadTexture(const std::string& fileName) {
 		return 0;
 	}
 	SetTextureRepeating(tex, true);
+
+	// Anisotropic filtering: stops textures smearing at grazing angles (the "smudged" grass and
+	// road edges). 0x84FE / 0x84FF are GL_TEXTURE_MAX_ANISOTROPY(_EXT) / GL_MAX_TEXTURE_MAX_ANISOTROPY(_EXT).
+	GLfloat maxAnisotropy = 1.0f;
+	glGetFloatv(0x84FF, &maxAnisotropy);
+	glBindTexture(GL_TEXTURE_2D, tex);
+	glTexParameterf(GL_TEXTURE_2D, 0x84FE, std::min(16.0f, maxAnisotropy));
+	glBindTexture(GL_TEXTURE_2D, 0);
 	return tex;
 }
 
@@ -482,7 +492,7 @@ void Renderer::UpdateShadowMatrix() {
 	const Vector3 forward(-viewMatrix.values[2], -viewMatrix.values[6], -viewMatrix.values[10]);
 
 	// Bigger box when the camera is high (overview shots); stepped, so it does not change every frame.
-	const float halfSize = std::min(700.0f, 150.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
+	const float halfSize = std::min(700.0f, 90.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
 	const Vector3 focus    = eyePosition + forward * (halfSize * 0.6f);
 	const Vector3 lightEye = focus + sunDirection * kShadowLightDistance;
 	const Vector3 up       = std::fabs(sunDirection.y) > 0.99f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
