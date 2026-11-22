@@ -3,9 +3,10 @@
 #include "../nclgl/Vector3.h"
 
 #include <functional>
+#include <memory>
 #include <vector>
 
-class ProceduralMesh;
+#include "ProceduralMesh.h"
 
 /*
 The road centreline. One path, three jobs:
@@ -20,24 +21,37 @@ index, so PositionAt is a cheap lerp with no searching.
 class RoadPath {
 public:
 	// Only x and z of the control points are used; heights come from SnapToTerrain.
-	RoadPath(const std::vector<Vector3>& controlPoints, float sampleSpacing = 4.0f);
+	// closed = true joins the last point back to the first, so distance wraps around (no jump).
+	RoadPath(const std::vector<Vector3>& controlPoints, float sampleSpacing = 4.0f, bool closed = false);
 
 	// Sets each sample's height from the terrain, keeps it above minHeight, then smooths
 	// it so the road has gentle gradients instead of following every bump.
 	void SnapToTerrain(const std::function<float(float, float)>& baseHeight,
 	                   float minHeight, int smoothingPasses, int smoothingRadius);
 
-	float   GetLength() const  { return (points.size() - 1) * spacing; }
+	float   GetLength() const  { return (closed ? points.size() : points.size() - 1) * spacing; }
+	bool    IsClosed() const   { return closed; }
 	float   GetSpacing() const { return spacing; }
 	const std::vector<Vector3>& GetPoints() const { return points; }
 
-	Vector3 PositionAt(float distance) const;    // clamped to [0, length]
+	Vector3 PositionAt(float distance) const;    // open road: clamped to [0, length]; closed road: wraps
 	Vector3 DirectionAt(float distance) const;   // unit tangent
 
-	// Flat ribbon of asphalt. Texture coords: x = 0..1 across, y = distance / vTileLength.
-	ProceduralMesh* BuildRibbon(float halfWidth, float heightOffset, float vTileLength) const;
+	// One piece of the road: its own mesh (vertices relative to 'centre') and bounding sphere,
+	// so the scene graph can frustum-cull the road piece by piece instead of all or nothing.
+	struct RibbonSegment {
+		std::unique_ptr<ProceduralMesh> mesh;
+		Vector3 centre;
+		float   radius = 0.0f;
+	};
+
+	// Flat ribbon of asphalt cut into pieces of 'samplesPerSegment' road samples.
+	// Texture coords: x = 0..1 across, y = distance along the road / vTileLength (continuous across pieces).
+	std::vector<RibbonSegment> BuildRibbonSegments(float halfWidth, float heightOffset, float vTileLength,
+	                                               int samplesPerSegment) const;
 
 private:
 	std::vector<Vector3> points;
 	float spacing;
+	bool  closed;
 };

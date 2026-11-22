@@ -11,6 +11,11 @@ float ShadowFactor(vec3 worldPos, vec3 N) {
 
 	// Normal offset: nudge the lookup point along the surface normal. This removes the
 	// self-shadowing stripes ("acne") on slopes better than a large depth bias would.
+	// Surfaces facing away from the sun get no direct light anyway, so skip the shadow lookups.
+	if (dot(N, sunDir.xyz) <= 0.0) {
+		return 1.0;
+	}
+
 	// The offset grows on surfaces that face away from the sun (grazing angles), where acne is worst.
 	float ndl    = saturate(dot(N, sunDir.xyz));
 	float offset = shadowParams.z * (1.0 + 2.0 * (1.0 - ndl));
@@ -21,16 +26,16 @@ float ShadowFactor(vec3 worldPos, vec3 N) {
 		return 1.0;
 	}
 
-	// 3x3 percentage-closer filtering. The hardware compare already blends a 2x2 block per tap,
-	// so nine taps give soft edges at a modest cost.
+	// 4-tap percentage-closer filtering. Each hardware depth compare already blends a 2x2 block
+	// of texels, so four taps placed 0.75 texel off-centre cover a soft ~4x4 footprint
+	// (the earlier 3x3 loop used nine taps for a similar softness).
 	float lit = 0.0;
-	for (int y = -1; y <= 1; ++y) {
-		for (int x = -1; x <= 1; ++x) {
-			vec2 offset = vec2(x, y) * shadowParams.x;
-			lit += texture(shadowMap, vec3(uvz.xy + offset, uvz.z - shadowParams.y));
-		}
-	}
-	lit /= 9.0;
+	const float o = 0.75 * shadowParams.x;
+	lit += texture(shadowMap, vec3(uvz.xy + vec2(-o, -o), uvz.z - shadowParams.y));
+	lit += texture(shadowMap, vec3(uvz.xy + vec2( o, -o), uvz.z - shadowParams.y));
+	lit += texture(shadowMap, vec3(uvz.xy + vec2(-o,  o), uvz.z - shadowParams.y));
+	lit += texture(shadowMap, vec3(uvz.xy + vec2( o,  o), uvz.z - shadowParams.y));
+	lit *= 0.25;
 
 	// Fade out near the edge of the map instead of showing a hard line where shadows stop.
 	vec2  fromCentre = abs(uvz.xy - 0.5) * 2.0;

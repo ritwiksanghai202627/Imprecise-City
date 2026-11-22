@@ -22,15 +22,24 @@ void main(void) {
 	// Two samples at unrelated scales hide the repeat of a single tiling texture.
 	vec3 grass = 0.6 * texture(grassTex, IN.texCoord).rgb
 	           + 0.4 * texture(grassTex, IN.texCoord * 0.173 + vec2(0.37, 0.11)).rgb;
-	vec3 sand  = texture(sandTex,  IN.texCoord).rgb;
-	vec3 rock  = texture(rockTex,  IN.texCoord).rgb;
 
 	// Texture choice comes from height and steepness, so no splat map is needed.
 	float sandAmount = 1.0 - smoothstep(2.0, 10.0, IN.worldPos.y);
 	float rockAmount = smoothstep(0.20, 0.40, slope);
 
-	vec3 albedo = lerp(grass, sand, sandAmount);
-	albedo      = lerp(albedo, rock, rockAmount);
+	// Texture lookups inside an 'if' need explicit derivatives, otherwise mip selection is
+	// undefined where neighbouring pixels take different branches (visible as seams).
+	vec2 dx = dFdx(IN.texCoord);
+	vec2 dy = dFdy(IN.texCoord);
+
+	// Most pixels are pure grass: only fetch sand / rock where they actually contribute.
+	vec3 albedo = grass;
+	if (sandAmount > 0.001) {
+		albedo = lerp(albedo, textureGrad(sandTex, IN.texCoord, dx, dy).rgb, sandAmount);
+	}
+	if (rockAmount > 0.001) {
+		albedo = lerp(albedo, textureGrad(rockTex, IN.texCoord, dx, dy).rgb, rockAmount);
+	}
 
 	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);

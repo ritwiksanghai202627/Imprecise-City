@@ -38,14 +38,16 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 
 	// World: the road needs the natural terrain height, then the terrain is carved around the road.
 	const std::vector<Vector3> roadControlPoints = {
-		Vector3(-480, 0,  340), Vector3(-330, 0,  250), Vector3(-370, 0,   90),
+		Vector3(-470, 0,  260), Vector3(-330, 0,  250), Vector3(-370, 0,   90),
 		Vector3(-210, 0,  -10), Vector3( -40, 0,  120), Vector3( 130, 0,   40),
-		Vector3( 200, 0, -140), Vector3(  60, 0, -260), Vector3( -90, 0, -330)
+		Vector3( 200, 0, -140), Vector3(  60, 0, -260), Vector3( -90, 0, -330),
+		// the way back round the west side, so the road is a closed loop
+		Vector3(-260, 0, -350), Vector3(-430, 0, -240), Vector3(-530, 0,  -70), Vector3(-535, 0,  110)
 	};
-	road = std::make_unique<RoadPath>(roadControlPoints, 4.0f);
+	road = std::make_unique<RoadPath>(roadControlPoints, 4.0f, true);
 	road->SnapToTerrain(&Terrain::IslandHeight, 10.0f, 8, 10);
 	terrain = std::make_unique<Terrain>(*road);
-	roadMesh.reset(road->BuildRibbon(5.0f, 0.15f, 8.0f));
+	roadSegments = road->BuildRibbonSegments(5.0f, 0.15f, 8.0f, 48);   // 48 samples = 192 m per piece, so the road can be culled
 
 	// Placeholder car body: a smooth rounded box (so reflections look right), 2 x 1.1 x 4.4 m.
 	carMesh.reset(BuildRoundedBox(Vector3(1.0f, 0.55f, 2.2f), 0.35f, 24, 48));
@@ -164,11 +166,15 @@ void Renderer::BuildScene() {
 		terrainGroup->AddChild(node);
 	}
 
-	// The road is one mesh for now; a bounding sphere around the origin covers all of it.
-	SceneObject* roadNode = new SceneObject(roadMesh.get(), Material::Road);
-	roadNode->SetBoundingRadius(800.0f);
-	roadNode->SetCastsShadow(false);   // a thin ribbon on the ground: it receives shadows but need not cast them
-	root->AddChild(roadNode);
+	// The road is cut into ~192 m pieces; each is its own node with its own bounding sphere, so
+	// pieces behind the camera are culled like terrain chunks.
+	for (const RoadPath::RibbonSegment& segment : roadSegments) {
+		SceneObject* roadNode = new SceneObject(segment.mesh.get(), Material::Road);
+		roadNode->SetTransform(Matrix4::Translation(segment.centre));
+		roadNode->SetBoundingRadius(segment.radius);
+		roadNode->SetCastsShadow(false);   // a thin ribbon on the ground: it receives shadows but need not cast them
+		root->AddChild(roadNode);
+	}
 
 	// Reflective paint (Material::Car). The mesh already has the car's proportions. Transform set every frame.
 	carNode = new SceneObject(carMesh.get(), Material::Car, Vector4(0.75f, 0.08f, 0.08f, 1.0f));
@@ -380,9 +386,10 @@ void Renderer::UpdateScene(float /*dt*/) {
 }
 
 void Renderer::UpdateCar(float dt) {
+	// The road is a closed loop, so the distance just wraps: no jump, no restart.
 	carDistance += kCarSpeed * dt;
-	if (carDistance > road->GetLength() - 30.0f) {
-		carDistance = 0.0f;   // loop for now
+	if (carDistance > road->GetLength()) {
+		carDistance -= road->GetLength();
 	}
 
 	const Vector3 pos = road->PositionAt(carDistance);

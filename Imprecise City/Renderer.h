@@ -6,6 +6,7 @@
 #include "SceneObject.h"
 #include "AnimatedModel.h"
 #include "SkinnedObject.h"
+#include "RoadPath.h"
 
 #include <chrono>
 #include <memory>
@@ -95,7 +96,7 @@ private:
 	// World data (meshes are owned here or by Terrain; scene nodes only point at them)
 	std::unique_ptr<RoadPath> road;
 	std::unique_ptr<Terrain>  terrain;
-	std::unique_ptr<Mesh>     roadMesh;
+	std::vector<RoadPath::RibbonSegment> roadSegments;
 	std::unique_ptr<Mesh>     carMesh;
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
