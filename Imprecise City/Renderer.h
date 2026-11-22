@@ -41,6 +41,10 @@ struct FrameStats {
 	unsigned shadowDraws = 0;   // draw calls in the shadow pass
 };
 
+// GPU time per pass, measured with GL_TIME_ELAPSED queries. The result of a query is read one
+// frame late (two query sets alternate), so reading never stalls the pipeline.
+enum GpuPass { PassShadow, PassOpaque, PassSky, PassTransparent, PassCount };
+
 class Renderer : public OGLRenderer {
 public:
 	Renderer(Window& parent);
@@ -124,6 +128,15 @@ private:
 	std::vector<SceneObject*> shadowCasterList;
 	std::unique_ptr<Shader>   shadowShader;
 	GLuint  shadowFBO = 0;
+
+	// GPU pass timers (see GpuPass). [set][pass]; 'set' alternates every frame.
+	GLuint queries[2][PassCount] = {};
+	float  gpuMs[PassCount]      = {};   // latest smoothed result in milliseconds
+	int    querySet              = 0;
+	bool   queriesPrimed         = false;   // false until set 0 has been issued once
+	void   BeginGpuTimer(GpuPass pass);
+	void   EndGpuTimer();
+	void   ReadGpuTimers();
 	GLuint  shadowTex = 0;
 	Matrix4 shadowView, shadowProj;
 	float   shadowTexelWorld = 0.0f;   // world size of one shadow texel

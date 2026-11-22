@@ -648,11 +648,15 @@ void GLTFLoader::LoadAnimationData(tinygltf::Model& model, GLTFScene& scene, Bas
 					
 					localMatrices[startMatrix + i] = transform;
 
-					if (node.parent) {//It's a local transform!
-						//We need to work out this frame's matrix for the parent node - may have been animated
-						GLTFNode* parent = &scene.sceneNodes[node.parent];
-						int localParentID = skinData.sceneToLocalLookup[parent->nodeID];
-						transform = worldMatrices[startMatrix + localParentID] * transform;
+					if (node.parent >= 0) {
+						const GLTFNode& parent = scene.sceneNodes[node.parent];
+						auto parentJoint = skinData.sceneToLocalLookup.find(parent.nodeID);
+						if (parentJoint != skinData.sceneToLocalLookup.end()) {
+							transform = worldMatrices[startMatrix + parentJoint->second] * transform;   // parent is a joint
+						}
+						else {
+							transform = parent.worldMatrix * transform;   // parent is a plain node (e.g. Armature)
+						}
 					}
 
 					worldMatrices[startMatrix + i] = transform;

@@ -79,6 +79,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	BuildScene();
 	BuildWalkers();
 	CreateShadowMap();
+	glGenQueries(2 * PassCount, &queries[0][0]);
 
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
 	glGenBuffers(1, &frameUBO);
@@ -117,6 +118,28 @@ Renderer::~Renderer() {
 	glDeleteBuffers(1, &frameUBO);
 	glDeleteTextures(1, &shadowTex);
 	glDeleteFramebuffers(1, &shadowFBO);
+	glDeleteQueries(2 * PassCount, &queries[0][0]);
+}
+
+void Renderer::BeginGpuTimer(GpuPass pass) {
+	glBeginQuery(GL_TIME_ELAPSED, queries[querySet][pass]);
+}
+
+void Renderer::EndGpuTimer() {
+	glEndQuery(GL_TIME_ELAPSED);
+}
+
+// Reads the OTHER set (issued last frame), which the GPU has almost certainly finished.
+void Renderer::ReadGpuTimers() {
+	if (!queriesPrimed) {
+		return;
+	}
+	const int previous = 1 - querySet;
+	for (int p = 0; p < PassCount; ++p) {
+		GLuint64 ns = 0;
+		glGetQueryObjectui64v(queries[previous][p], GL_QUERY_RESULT, &ns);
+		gpuMs[p] = gpuMs[p] * 0.9f + (float)(ns * 1e-6) * 0.1f;   // smooth so the title is readable
+	}
 }
 
 // The scene graph:
@@ -427,11 +450,12 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 	const double low     = worstFrame > 0.0f ? 1.0 / worstFrame : 0.0;
 	const double high    = bestFrame < 1e8f ? 1.0 / bestFrame : 0.0;
 
-	char title[320];
+	char title[420];
 	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | frustum %s | shadows %s | cam %s",
+		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s",
 		titleFrames / titleTimer, average, low, high,
 		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
+		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent],
 		cullingFrozen ? "FROZEN" : "camera",
 		shadowsEnabled ? "on" : "off",
 		cameraMode == CameraMode::Cinematic ? "cinematic" : "free");
@@ -700,8 +724,12 @@ void Renderer::RenderScene() {
 	stats = FrameStats();
 	UploadFrameData();
 
+	ReadGpuTimers();
+
 	if (shadowsEnabled) {
+		BeginGpuTimer(PassShadow);
 		RenderShadowPass();
+		EndGpuTimer();
 	}
 
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -720,19 +748,33 @@ void Renderer::RenderScene() {
 	EndDebugGroup();
 
 	StartDebugGroup("Opaque pass");
+	BeginGpuTimer(PassOpaque);
 	DrawNodes(opaqueList);
+	EndGpuTimer();
 	EndDebugGroup();
 
 	StartDebugGroup("Sky pass");
+	BeginGpuTimer(PassSky);
 	DrawSky();
+	EndGpuTimer();
 	EndDebugGroup();
 
 	StartDebugGroup("Transparent pass");
+	BeginGpuTimer(PassTransparent);
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	DrawNodes(transparentList);
 	glDisable(GL_BLEND);
+	EndGpuTimer();
 	EndDebugGroup();
+
+	// An unused query object cannot be read, so shadows-off frames must still issue the shadow one.
+	if (!shadowsEnabled) {
+		BeginGpuTimer(PassShadow);
+		EndGpuTimer();
+	}
+	queriesPrimed = true;
+	querySet = 1 - querySet;
 
 	ClearNodeLists();
 }

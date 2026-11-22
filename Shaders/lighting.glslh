@@ -11,7 +11,10 @@ float ShadowFactor(vec3 worldPos, vec3 N) {
 
 	// Normal offset: nudge the lookup point along the surface normal. This removes the
 	// self-shadowing stripes ("acne") on slopes better than a large depth bias would.
-	vec4 clip = shadowViewProj * vec4(worldPos + N * shadowParams.z, 1.0);
+	// The offset grows on surfaces that face away from the sun (grazing angles), where acne is worst.
+	float ndl    = saturate(dot(N, sunDir.xyz));
+	float offset = shadowParams.z * (1.0 + 2.0 * (1.0 - ndl));
+	vec4 clip = shadowViewProj * vec4(worldPos + N * offset, 1.0);
 	vec3 uvz  = clip.xyz / clip.w * 0.5 + 0.5;   // orthographic, so w is 1; maps -1..1 to 0..1
 
 	if (uvz.z > 1.0) {
