@@ -29,6 +29,10 @@ public:
 	void SnapToTerrain(const std::function<float(float, float)>& baseHeight,
 	                   float minHeight, int smoothingPasses, int smoothingRadius);
 
+	// Levels the road toward 'height' near (centre.x, centre.z): full strength inside innerRadius,
+	// fading out by outerRadius. Used for the city plateau; call before the terrain is built.
+	void FlattenAround(const Vector3& centre, float innerRadius, float outerRadius, float height);
+
 	float   GetLength() const  { return (closed ? points.size() : points.size() - 1) * spacing; }
 	bool    IsClosed() const   { return closed; }
 	float   GetSpacing() const { return spacing; }

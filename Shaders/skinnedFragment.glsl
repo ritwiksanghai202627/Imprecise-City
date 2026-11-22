@@ -18,7 +18,7 @@ void main(void) {
 	vec3 N      = normalize(IN.normal);
 	vec3 albedo = texture(diffuseTex, IN.texCoord).rgb * baseColour.rgb;
 
-	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N));
+	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);

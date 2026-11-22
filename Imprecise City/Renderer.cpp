@@ -7,10 +7,23 @@
 #include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <vector>
 
 namespace {
 	const float kRadToDeg = 57.2957795f;
+	const float kPi       = 3.14159265f;
+
+	float Smoothstep(float e0, float e1, float x) {
+		float t = (x - e0) / (e1 - e0);
+		t = std::min(std::max(t, 0.0f), 1.0f);
+		return t * t * (3.0f - 2.0f * t);
+	}
+	Vector3 Mix(const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; }
+
+	// Time-of-day presets (hours) the T key cycles through.
+	const float kTimePresets[5]  = { 12.0f, 16.5f, 18.4f, 0.0f, 6.2f };
+	const char* kTimePresetName[5] = { "noon", "afternoon", "dusk", "midnight", "dawn" };
 
 	// Cinematic camera tuning
 	const float kCarSpeed      = 20.0f;   // metres per second
@@ -46,7 +59,18 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	};
 	road = std::make_unique<RoadPath>(roadControlPoints, 4.0f, true);
 	road->SnapToTerrain(&Terrain::IslandHeight, 10.0f, 8, 10);
-	terrain = std::make_unique<Terrain>(*road);
+
+	// The city goes on the flattest land the road passes: level the road and the ground there first.
+	Vector3 cityCentre;
+	float   cityRoadDistance = 0.0f;
+	TerrainPlateau plateau;
+	const bool cityFound = City::ChooseSite(*road, &Terrain::IslandHeight, CityConst::kPlateauInner, cityCentre, cityRoadDistance);
+	if (cityFound) {
+		road->FlattenAround(cityCentre, CityConst::kPlateauInner, CityConst::kPlateauOuter, cityCentre.y);
+		plateau.x = cityCentre.x; plateau.z = cityCentre.z; plateau.y = cityCentre.y;
+		plateau.inner = CityConst::kPlateauInner; plateau.outer = CityConst::kPlateauOuter;
+	}
+	terrain = std::make_unique<Terrain>(*road, plateau);
 	roadSegments = road->BuildRibbonSegments(5.0f, 0.15f, 8.0f, 48);   // 48 samples = 192 m per piece, so the road can be culled
 
 	// Placeholder car body: a smooth rounded box (so reflections look right), 2 x 1.1 x 4.4 m.
@@ -61,6 +85,8 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	carShader     = std::make_unique<Shader>("sceneVertex.glsl", "carFragment.glsl");
 	skinnedShader = std::make_unique<Shader>("skinnedVertex.glsl", "skinnedFragment.glsl");
 	skinnedShadowShader = std::make_unique<Shader>("skinnedShadowVertex.glsl", "shadowFragment.glsl");
+	buildingShader       = std::make_unique<Shader>("buildingVertex.glsl", "buildingFragment.glsl");
+	buildingShadowShader = std::make_unique<Shader>("buildingShadowVertex.glsl", "shadowFragment.glsl");
 	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
 	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
@@ -71,6 +97,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	if (!carMesh || !terrainShader->LoadSuccess() || !roadShader->LoadSuccess() ||
 	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() || !shadowShader->LoadSuccess() ||
 	    !carShader->LoadSuccess() || !skinnedShader->LoadSuccess() || !skinnedShadowShader->LoadSuccess() ||
+	    !buildingShader->LoadSuccess() || !buildingShadowShader->LoadSuccess() ||
 	    !skyShader->LoadSuccess() || !bakeSkyShader->LoadSuccess() ||
 	    !grassTexture || !sandTexture || !rockTexture) {
 		std::cout << "Renderer: resource loading failed, see messages above.\n";
@@ -79,6 +106,10 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 
 	CreateWhiteTexture();
 	BuildScene();
+	if (cityFound) {
+		BuildCity(cityCentre, cityRoadDistance);
+	}
+	BuildTraffic();
 	BuildWalkers();
 	CreateShadowMap();
 	glGenQueries(2 * PassCount, &queries[0][0]);
@@ -89,20 +120,12 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	glBufferData(GL_UNIFORM_BUFFER, sizeof(FrameData), nullptr, GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUBO);
 
-	// Constant "midday" environment for now; time of day and seasons will drive these later.
-	Vector3 sun(0.45f, 0.70f, 0.55f);
-	const float sunLen = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
-	sun = sun * (1.0f / sunLen);
-	sunDirection = sun;
-	frameData.sunDir    = Vector4(sun.x, sun.y, sun.z, 1.0f);
-	frameData.sunColour = Vector4(1.0f, 0.95f, 0.85f, 1.0f);
-	frameData.fogColour = Vector4(0.62f, 0.75f, 0.90f, 0.00045f);
-
-	zenithColour = Vector3(0.18f, 0.40f, 0.78f);
+	// Sun, sky and fog come from the time of day (starts at noon).
+	ApplyTimeOfDay();
 	BuildEnvironmentMap();   // needs the frame UBO and the sun / fog values above
+	lastBakedHour = timeOfDay;
 
 	glEnable(GL_DEPTH_TEST);
-	glClearColor(0.62f, 0.75f, 0.90f, 1.0f);
 
 	lastTick = std::chrono::steady_clock::now();
 	init = true;
@@ -121,6 +144,9 @@ Renderer::~Renderer() {
 	glDeleteTextures(1, &shadowTex);
 	glDeleteFramebuffers(1, &shadowFBO);
 	glDeleteQueries(2 * PassCount, &queries[0][0]);
+	if (!citySSBOs.empty()) {
+		glDeleteBuffers(static_cast<GLsizei>(citySSBOs.size()), citySSBOs.data());
+	}
 }
 
 void Renderer::BeginGpuTimer(GpuPass pass) {
@@ -328,6 +354,194 @@ void Renderer::UpdateWalkers(float dt) {
 	}
 }
 
+// Sun, moon, sky and fog for the current hour. The sun travels east -> west over a tilted arc;
+// when it is below the horizon the same light slot becomes a dim blue moon (its mirror image), so
+// shadows and lighting keep working at night. Everything is a blend of three palettes: day, dusk, night.
+void Renderer::ApplyTimeOfDay() {
+	const float theta = (timeOfDay - 6.0f) / 12.0f * kPi;   // 0 at 06:00 (sunrise), pi at 18:00 (sunset)
+	Vector3 sun(std::cos(theta), std::sin(theta) * 0.75f, 0.5f);
+	sun = sun * (1.0f / std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z));
+	const float elevation = sun.y;
+
+	const Vector3 dayFog(0.62f, 0.75f, 0.90f),  duskFog(0.90f, 0.55f, 0.38f),  nightFog(0.035f, 0.045f, 0.11f);
+	const Vector3 dayZen(0.18f, 0.40f, 0.78f),  duskZen(0.22f, 0.28f, 0.55f),  nightZen(0.008f, 0.012f, 0.04f);
+	const Vector3 daySun(1.0f, 0.95f, 0.85f),   duskSun(1.0f, 0.50f, 0.22f),   moon(0.45f, 0.55f, 1.0f);
+	const float   dayDensity = 0.00045f, duskDensity = 0.00060f, nightDensity = 0.0007f;
+	const float   dayPower = 1.0f, duskPower = 0.85f, moonPower = 0.22f;
+
+	Vector3 fog, zenith, light;
+	float   density, power;
+	Vector3 lightDirection = sun;
+	if (elevation >= 0.0f) {
+		const float t = Smoothstep(0.0f, 0.45f, elevation);
+		fog = Mix(duskFog, dayFog, t);  zenith = Mix(duskZen, dayZen, t);  light = Mix(duskSun, daySun, t);
+		density = duskDensity + (dayDensity - duskDensity) * t;
+		power   = (duskPower + (dayPower - duskPower) * t) * Smoothstep(0.0f, 0.08f, elevation);   // fades to 0 at the horizon
+	}
+	else {
+		const float t = Smoothstep(0.0f, 0.25f, -elevation);
+		fog = Mix(duskFog, nightFog, t);  zenith = Mix(duskZen, nightZen, t);  light = Mix(duskSun, moon, t);
+		density = duskDensity + (nightDensity - duskDensity) * t;
+		power   = (duskPower + (moonPower - duskPower) * t) * Smoothstep(0.0f, 0.12f, -elevation);   // moon fades in after sunset
+		lightDirection = Vector3(-sun.x, -sun.y, sun.z);   // the moon: mirror of the sun, above the horizon
+	}
+
+	sunDirection = lightDirection;
+	frameData.sunDir    = Vector4(lightDirection.x, lightDirection.y, lightDirection.z, power);
+	frameData.sunColour = Vector4(light.x, light.y, light.z, 1.0f);
+	frameData.fogColour = Vector4(fog.x, fog.y, fog.z, density);
+	zenithColour = zenith;
+
+	const float night = 1.0f - Smoothstep(-0.10f, 0.10f, elevation);
+	const float ambientScale = 0.35f + 0.65f * Smoothstep(-0.10f, 0.30f, elevation);
+	frameData.environment.x = night;
+	frameData.environment.w = ambientScale;
+
+	glClearColor(fog.x, fog.y, fog.z, 1.0f);
+}
+
+// Picks the lights for this frame. Street lamps: only the 8 nearest the camera are sent to the GPU
+// (the fragment shaders loop over a short list, never over every lamp on the island).
+// Headlights: two spot lights on the player's car. Both switch on as it gets dark.
+void Renderer::UpdateLights() {
+	const float night   = frameData.environment.x;
+	const float lampsOn = std::min(std::max((night - 0.2f) * 3.0f, 0.0f), 1.0f);
+
+	int pointCount = 0;
+	if (city && lampsOn > 0.0f) {
+		const std::vector<Vector3>& heads = city->GetLampHeads();
+		lampScratch.clear();
+		for (size_t i = 0; i < heads.size(); ++i) {
+			const Vector3 d = heads[i] - eyePosition;
+			lampScratch.push_back(std::make_pair(d.x * d.x + d.y * d.y + d.z * d.z, static_cast<int>(i)));
+		}
+		pointCount = static_cast<int>(std::min<size_t>(kMaxPointLights, lampScratch.size()));
+		std::partial_sort(lampScratch.begin(), lampScratch.begin() + pointCount, lampScratch.end());
+
+		for (int i = 0; i < pointCount; ++i) {
+			const Vector3& p = heads[lampScratch[i].second];
+			GpuPointLight& light = frameData.pointLights[i];
+			light.posRadius = Vector4(p.x, p.y, p.z, 45.0f);
+			light.colour    = Vector4(1.0f * 3.0f * lampsOn, 0.72f * 3.0f * lampsOn, 0.40f * 3.0f * lampsOn, 1.0f);
+		}
+	}
+
+	int spotCount = 0;
+	if (night > 0.2f) {
+		const Vector3 pos = road->PositionAt(carDistance);
+		Vector3 forward = road->DirectionAt(carDistance);
+		forward.y = 0.0f;
+		const float len = std::sqrt(forward.x * forward.x + forward.z * forward.z);
+		forward = forward * (1.0f / len);
+		const Vector3 right(-forward.z, 0.0f, forward.x);
+		Vector3 aim(forward.x, -0.08f, forward.z);   // tilted slightly down onto the road
+		aim = aim * (1.0f / std::sqrt(aim.x * aim.x + aim.y * aim.y + aim.z * aim.z));
+
+		for (int i = 0; i < kMaxSpotLights; ++i) {
+			const float side = (i == 0) ? -0.7f : 0.7f;
+			const Vector3 p = pos + forward * 2.3f + right * side + Vector3(0.0f, 1.0f, 0.0f);
+			GpuSpotLight& light = frameData.spotLights[i];
+			light.posRange       = Vector4(p.x, p.y, p.z, 80.0f);
+			light.dirCosInner    = Vector4(aim.x, aim.y, aim.z, std::cos(14.0f / kRadToDeg));
+			light.colourCosOuter = Vector4(5.0f, 4.65f, 3.9f, std::cos(32.0f / kRadToDeg));
+		}
+		spotCount = kMaxSpotLights;
+	}
+
+	frameData.environment.y = static_cast<float>(pointCount);
+	frameData.environment.z = static_cast<float>(spotCount);
+}
+
+// Turns the city's instance list into districts: instances are bucketed into 192 m cells, each cell
+// gets one shader storage buffer and one scene node (own bounding sphere, so it can be culled).
+void Renderer::BuildCity(const Vector3& centre, float roadDistance) {
+	city = std::make_unique<City>();
+	city->Generate(*road, centre, roadDistance);
+	unitBox.reset(BuildUnitBox());
+
+	const float cell = 192.0f;
+	std::map<std::pair<int, int>, std::vector<CityInstance>> buckets;
+	for (const CityInstance& inst : city->GetInstances()) {
+		const int ix = static_cast<int>(std::floor(inst.px / cell));
+		const int iz = static_cast<int>(std::floor(inst.pz / cell));
+		buckets[std::make_pair(ix, iz)].push_back(inst);
+	}
+
+	for (const auto& bucket : buckets) {
+		const std::vector<CityInstance>& list = bucket.second;
+
+		Vector3 average(0, 0, 0);
+		for (const CityInstance& inst : list) {
+			average = average + Vector3(inst.px, inst.py + inst.sy * 0.5f, inst.pz);
+		}
+		average = average * (1.0f / list.size());
+
+		float radius = 1.0f;
+		for (const CityInstance& inst : list) {
+			const Vector3 d = Vector3(inst.px, inst.py + inst.sy * 0.5f, inst.pz) - average;
+			radius = std::max(radius, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z)
+			                          + 0.5f * std::sqrt(inst.sx * inst.sx + inst.sy * inst.sy + inst.sz * inst.sz));
+		}
+
+		GLuint buffer = 0;
+		glGenBuffers(1, &buffer);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, list.size() * sizeof(CityInstance), list.data(), GL_STATIC_DRAW);
+		citySSBOs.push_back(buffer);
+
+		CityDistrict* district = new CityDistrict(unitBox.get(), buffer, static_cast<int>(list.size()));
+		district->SetTransform(Matrix4::Translation(average));   // only used for culling and sorting; instances hold world positions
+		district->SetBoundingRadius(radius);
+		root->AddChild(district);
+	}
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	std::cout << "City: " << buckets.size() << " districts\n";
+}
+
+// A handful of other cars driving the loop: some with the road's direction (right-hand lane),
+// some against it, at different speeds, in different paint.
+void Renderer::BuildTraffic() {
+	const int   kCount = 8;
+	const Vector4 paint[kCount] = {
+		Vector4(0.10f, 0.25f, 0.65f, 1), Vector4(0.85f, 0.85f, 0.88f, 1), Vector4(0.95f, 0.75f, 0.10f, 1), Vector4(0.08f, 0.08f, 0.09f, 1),
+		Vector4(0.10f, 0.50f, 0.25f, 1), Vector4(0.80f, 0.35f, 0.08f, 1), Vector4(0.55f, 0.55f, 0.60f, 1), Vector4(0.55f, 0.10f, 0.55f, 1)
+	};
+	const float length = road->GetLength();
+
+	for (int i = 0; i < kCount; ++i) {
+		SceneObject* node = new SceneObject(carMesh.get(), Material::Car, paint[i]);
+		node->SetBoundingRadius(3.0f);
+		root->AddChild(node);
+
+		TrafficCar car;
+		car.node      = node;
+		car.distance  = length * (i + 0.5f) / kCount;
+		car.speed     = 12.0f + 2.0f * (i % 4);
+		car.direction = (i % 2 == 0) ? 1.0f : -1.0f;
+		car.lane      = (i % 2 == 0) ? 2.6f : -2.6f;   // each travels on its own side of the centre line
+		traffic.push_back(car);
+	}
+	UpdateTraffic(0.0f);
+}
+
+void Renderer::UpdateTraffic(float dt) {
+	const float length = road->GetLength();
+	for (TrafficCar& car : traffic) {
+		car.distance += car.direction * car.speed * dt;
+		car.distance -= std::floor(car.distance / length) * length;   // wrap round the loop
+
+		const Vector3 p = road->PositionAt(car.distance);
+		Vector3 d = road->DirectionAt(car.distance);
+		const Vector3 right(-d.z, 0.0f, d.x);   // right of the road's direction (y ignored: the road never banks)
+		const Vector3 heading = d * car.direction;
+
+		car.node->SetTransform(
+			Matrix4::Translation(p + right * car.lane + Vector3(0.0f, 0.6f, 0.0f)) *
+			Matrix4::Rotation(YawFromDirection(heading), Vector3(0, 1, 0)) *
+			Matrix4::Rotation(PitchFromDirection(heading), Vector3(1, 0, 0)));
+	}
+}
+
 GLuint Renderer::LoadTexture(const std::string& fileName) {
 	const std::string path = std::string(TEXTUREDIR) + fileName;
 	GLuint tex = SOIL_load_OGL_texture(path.c_str(), SOIL_LOAD_AUTO, SOIL_CREATE_NEW_ID, SOIL_FLAG_MIPMAPS);
@@ -363,6 +577,16 @@ void Renderer::UpdateScene(float /*dt*/) {
 	if (keys->KeyTriggered(KEYBOARD_C)) { SwitchCameraMode(); }
 	if (keys->KeyTriggered(KEYBOARD_F)) { cullingFrozen = !cullingFrozen; }
 	if (keys->KeyTriggered(KEYBOARD_H)) { shadowsEnabled = !shadowsEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_T)) {
+		timePreset = (timePreset + 1) % 5;   // jump to the next time-of-day preset
+		timeOfDay  = kTimePresets[timePreset];
+		std::cout << "Time of day: " << kTimePresetName[timePreset] << "\n";
+	}
+	if (keys->KeyTriggered(KEYBOARD_Y)) { timeAuto = !timeAuto; }
+	if (timeAuto) {
+		timeOfDay += dt * 0.25f;   // a whole day in 96 seconds
+		if (timeOfDay >= 24.0f) { timeOfDay -= 24.0f; }
+	}
 
 	if (cameraMode == CameraMode::Cinematic) {
 		UpdateCar(dt);   // the car only drives while the cinematic camera is following it
@@ -374,6 +598,12 @@ void Renderer::UpdateScene(float /*dt*/) {
 
 	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, 60.0f);
 
+	ApplyTimeOfDay();
+	if (std::fabs(timeOfDay - lastBakedHour) > 0.04f) {
+		BuildEnvironmentMap();   // the car's reflections follow the sky (6 tiny draws; only when the hour moved)
+		lastBakedHour = timeOfDay;
+	}
+	UpdateTraffic(dt);
 	UpdateWalkers(dt);   // set the walkers' transforms before the graph recomputes world matrices
 	root->Update(dt);   // recomputes every node's world transform from its parent's
 
@@ -381,6 +611,7 @@ void Renderer::UpdateScene(float /*dt*/) {
 		cullFrustum.FromMatrix(projMatrix * viewMatrix);
 	}
 
+	UpdateLights();
 	UpdateShadowMatrix();
 	UpdateWindowTitle(rawDt);
 }
@@ -459,9 +690,10 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 
 	char title[420];
 	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s",
+		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s",
 		titleFrames / titleTimer, average, low, high,
 		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
+		static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
 		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent],
 		cullingFrozen ? "FROZEN" : "camera",
 		shadowsEnabled ? "on" : "off",
@@ -583,15 +815,30 @@ void Renderer::RenderShadowPass() {
 	Use(*shadowShader);
 	const GLint shadowModelLoc = glGetUniformLocation(activeProgram, "modelMatrix");
 	bool anySkinned = false;
+	bool anyBuildings = false;
 	for (SceneObject* node : shadowCasterList) {
 		if (node->GetMaterial() == Material::Skinned) {
 			anySkinned = true;   // drawn below with the skinning shader
+			continue;
+		}
+		if (node->GetMaterial() == Material::Building) {
+			anyBuildings = true;   // drawn below with the instancing shader
 			continue;
 		}
 		const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
 		glUniformMatrix4fv(shadowModelLoc, 1, false, model.values);
 		node->Draw(*this);
 		++stats.shadowDraws;
+	}
+
+	if (anyBuildings) {
+		Use(*buildingShadowShader);
+		for (SceneObject* node : shadowCasterList) {
+			if (node->GetMaterial() == Material::Building) {
+				node->Draw(*this);   // binds the district's instance buffer and draws all its boxes at once
+				++stats.shadowDraws;
+			}
+		}
 	}
 
 	if (anySkinned) {
@@ -658,6 +905,7 @@ void Renderer::BindMaterial(Material material) {
 		case Material::Car:  Use(*carShader);  break;
 		case Material::Skinned: Use(*skinnedShader); break;
 		case Material::Sea:  Use(*seaShader);  break;
+		case Material::Building: Use(*buildingShader); break;
 	}
 
 	// Pull the road slightly toward the camera so it never z-fights the terrain under it.
@@ -718,7 +966,13 @@ void Renderer::DrawNode(SceneObject* node) {
 	node->Draw(*this);
 
 	++stats.drawCalls;
-	stats.triangles += node->GetMesh()->GetTriCount();
+	if (node->GetMaterial() == Material::Building) {
+		// One draw call, many boxes: count them all.
+		stats.triangles += node->GetMesh()->GetTriCount() * static_cast<CityDistrict*>(node)->InstanceCount();   // valid: only CityDistrict uses Material::Building
+	}
+	else {
+		stats.triangles += node->GetMesh()->GetTriCount();
+	}
 }
 
 void Renderer::DrawNodes(const std::vector<SceneObject*>& list) {

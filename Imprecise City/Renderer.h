@@ -7,6 +7,8 @@
 #include "AnimatedModel.h"
 #include "SkinnedObject.h"
 #include "RoadPath.h"
+#include "City.h"
+#include "CityDistrict.h"
 
 #include <chrono>
 #include <memory>
@@ -18,6 +20,19 @@ class RoadPath;
 
 // CPU mirror of the FrameData uniform block in Shaders/frame.glslh (std140).
 // Field order and types must match the GLSL block exactly.
+constexpr int kMaxPointLights = 8;   // street lamps nearest the camera (the renderer picks them each frame)
+constexpr int kMaxSpotLights  = 2;   // the car's headlights
+
+struct GpuPointLight {
+	Vector4 posRadius;
+	Vector4 colour;
+};
+struct GpuSpotLight {
+	Vector4 posRange;
+	Vector4 dirCosInner;
+	Vector4 colourCosOuter;
+};
+
 struct FrameData {
 	Matrix4 viewMatrix;
 	Matrix4 projMatrix;
@@ -28,10 +43,13 @@ struct FrameData {
 	Vector4 fogColour;
 	Vector4 timeInfo;
 	Vector4 shadowParams;
+	Vector4 environment;   // x = night factor, y = point lights used, z = spot lights used, w = ambient scale
+	GpuPointLight pointLights[kMaxPointLights];
+	GpuSpotLight  spotLights[kMaxSpotLights];
 };
 static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
-static_assert(sizeof(FrameData) == 3 * 64 + 6 * 16, "FrameData must match the std140 block in frame.glslh");
+static_assert(sizeof(FrameData) == 3 * 64 + 7 * 16 + kMaxPointLights * 32 + kMaxSpotLights * 48, "FrameData must match the std140 block in frame.glslh");
 
 // Per-frame counters, shown in the window title.
 struct FrameStats {
@@ -83,6 +101,11 @@ private:
 	void   SwitchCameraMode();
 	void   UpdateCar(float dt);
 	void   UploadFrameData();
+	void   ApplyTimeOfDay();      // sun, moon, sky and fog colours for 'timeOfDay'
+	void   UpdateLights();        // street lamps near the camera + car headlights -> frame UBO
+	void   BuildCity(const Vector3& centre, float roadDistance);
+	void   BuildTraffic();
+	void   UpdateTraffic(float dt);
 	void   UpdateWindowTitle(float dt);
 	GLuint LoadTexture(const std::string& fileName);
 	void   Use(Shader& shader);
@@ -98,8 +121,28 @@ private:
 	std::unique_ptr<Terrain>  terrain;
 	std::vector<RoadPath::RibbonSegment> roadSegments;
 	std::unique_ptr<Mesh>     carMesh;
+	std::unique_ptr<City>            city;
+	std::unique_ptr<ProceduralMesh>  unitBox;       // shared by every building / lamp instance
+	std::vector<GLuint>              citySSBOs;     // one instance buffer per district
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
+
+	// Other cars on the road (same mesh as the player's, different paint)
+	struct TrafficCar {
+		SceneObject* node;
+		float distance;    // metres along the road
+		float speed;       // metres per second
+		float direction;   // +1 with the road's direction, -1 against it
+		float lane;        // sideways offset from the centre line (metres, + = right of the road's direction)
+	};
+	std::vector<TrafficCar> traffic;
+
+	// Time of day: hours 0..24. T jumps between presets, Y runs the clock.
+	float timeOfDay      = 12.0f;
+	bool  timeAuto       = false;
+	int   timePreset     = 0;
+	float lastBakedHour  = -100.0f;   // the sky was last baked into the cube map at this hour
+	std::vector<std::pair<float, int>> lampScratch;   // reused every frame: (distance^2, lamp index)
 
 	// Animated characters: one shared model, several instances walking along the verge of the road
 	struct Walker {
@@ -146,6 +189,7 @@ private:
 
 	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
+	std::unique_ptr<Shader> buildingShader, buildingShadowShader;
 	std::unique_ptr<Shader> carShader, skinnedShader, skinnedShadowShader, skyShader, bakeSkyShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
 	GLuint whiteTexture = 0;           // 1x1 white, bound when a model has no texture

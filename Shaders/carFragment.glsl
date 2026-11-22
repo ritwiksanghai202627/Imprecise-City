@@ -22,7 +22,7 @@ void main(void) {
 	vec3 V = normalize(cameraPos.xyz - IN.worldPos);
 
 	float shadow = ShadowFactor(IN.worldPos, N);
-	vec3  paint  = ApplyDirectional(baseColour.rgb, N, shadow);
+	vec3  paint  = ApplyLighting(baseColour.rgb, N, IN.worldPos, shadow);
 
 	vec3  R       = reflect(-V, N);
 	vec3  env     = textureLod(envMap, R, 1.0).rgb;

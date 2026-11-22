@@ -41,7 +41,7 @@ void main(void) {
 		albedo = lerp(albedo, textureGrad(rockTex, IN.texCoord, dx, dy).rgb, rockAmount);
 	}
 
-	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N));
+	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);

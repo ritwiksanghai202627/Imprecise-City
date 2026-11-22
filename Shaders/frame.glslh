@@ -1,6 +1,20 @@
 // Per-frame data, uploaded once per frame into one uniform buffer (binding point 0).
 // Must match struct FrameData in Renderer.h field for field (std140 layout).
 // This block is also where time of day / season / wetness will live later.
+#define MAX_POINT_LIGHTS 8
+#define MAX_SPOT_LIGHTS  2
+
+struct PointLight {
+	vec4 posRadius;       // xyz = world position, w = radius where the light has faded to nothing
+	vec4 colour;          // rgb = colour * intensity
+};
+
+struct SpotLight {
+	vec4 posRange;        // xyz = world position, w = range
+	vec4 dirCosInner;     // xyz = unit direction the light points, w = cos(inner cone angle)
+	vec4 colourCosOuter;  // rgb = colour * intensity, w = cos(outer cone angle)
+};
+
 layout(std140, binding = 0) uniform FrameData {
 	mat4 viewMatrix;
 	mat4 projMatrix;
@@ -11,4 +25,7 @@ layout(std140, binding = 0) uniform FrameData {
 	vec4 fogColour;        // rgb, w = fog density
 	vec4 timeInfo;         // x = seconds since start
 	vec4 shadowParams;     // x = 1 / shadow map size, y = depth bias, z = normal offset (world units), w = shadows on
+	vec4 environment;      // x = night factor (0 day .. 1 night), y = point lights in use, z = spot lights in use, w = ambient scale
+	PointLight pointLights[MAX_POINT_LIGHTS];   // street lamps nearest the camera
+	SpotLight  spotLights[MAX_SPOT_LIGHTS];     // car headlights
 };

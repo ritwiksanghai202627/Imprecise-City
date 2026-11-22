@@ -19,6 +19,12 @@ vertices are relative to the tile centre, plus a bounding sphere, so a tile that
 screen is never sent to the GPU. Texturing happens in the fragment shader from height and
 slope, so a tile only needs positions, normals and texture coordinates.
 */
+// A circular flat area (the city site): terrain is blended to height y between radius inner and outer.
+struct TerrainPlateau {
+	float x = 0.0f, z = 0.0f, y = 0.0f;
+	float inner = 0.0f, outer = 0.0f;   // outer <= inner means "no plateau"
+};
+
 class Terrain {
 public:
 	static const int kCellsPerChunk = 32;
@@ -29,7 +35,7 @@ public:
 		float   radius;   // bounding sphere radius around 'centre'
 	};
 
-	Terrain(const RoadPath& road, int gridSize = 257, float cellSize = 8.0f);
+	Terrain(const RoadPath& road, const TerrainPlateau& plateau = TerrainPlateau(), int gridSize = 257, float cellSize = 8.0f);
 
 	const std::vector<Chunk>& GetChunks() const { return chunks; }
 

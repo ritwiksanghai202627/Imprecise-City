@@ -107,6 +107,17 @@ void RoadPath::SnapToTerrain(const std::function<float(float, float)>& baseHeigh
 	}
 }
 
+void RoadPath::FlattenAround(const Vector3& centre, float innerRadius, float outerRadius, float height) {
+	for (Vector3& p : points) {
+		const float dx = p.x - centre.x, dz = p.z - centre.z;
+		const float d  = std::sqrt(dx * dx + dz * dz);
+		float t = (d - innerRadius) / (outerRadius - innerRadius);
+		t = std::min(std::max(t, 0.0f), 1.0f);
+		const float w = 1.0f - t * t * (3.0f - 2.0f * t);   // smoothstep falloff
+		p.y += (height - p.y) * w;
+	}
+}
+
 Vector3 RoadPath::PositionAt(float distance) const {
 	const int n = static_cast<int>(points.size());
 

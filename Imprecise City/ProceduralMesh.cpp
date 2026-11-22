@@ -83,3 +83,40 @@ ProceduralMesh* BuildRoundedBox(const Vector3& radii, float e, int stacks, int s
 	}
 	return new ProceduralMesh(positions, uvs, indices, &normals);
 }
+
+void ProceduralMesh::DrawInstanced(int instanceCount) const {
+	glBindVertexArray(arrayObject);
+	glDrawElementsInstanced(type, numIndices, GL_UNSIGNED_INT, nullptr, instanceCount);
+	glBindVertexArray(0);
+}
+
+ProceduralMesh* BuildUnitBox() {
+	std::vector<Vector3>      positions, normals;
+	std::vector<Vector2>      uvs;
+	std::vector<unsigned int> indices;
+
+	// Each face: outward normal, then two tangent axes (u x v = normal, so the winding is counter-clockwise from outside).
+	struct Face { Vector3 n, u, v; };
+	const Face faces[6] = {
+		{ Vector3( 1, 0, 0), Vector3(0, 0,-1), Vector3(0, 1, 0) },
+		{ Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 1, 0) },
+		{ Vector3( 0, 1, 0), Vector3(1, 0, 0), Vector3(0, 0,-1) },
+		{ Vector3( 0,-1, 0), Vector3(1, 0, 0), Vector3(0, 0, 1) },
+		{ Vector3( 0, 0, 1), Vector3(1, 0, 0), Vector3(0, 1, 0) },
+		{ Vector3( 0, 0,-1), Vector3(-1,0, 0), Vector3(0, 1, 0) },
+	};
+	for (const Face& f : faces) {
+		const unsigned int first = static_cast<unsigned int>(positions.size());
+		const Vector3 centre = f.n * 0.5f + Vector3(0.0f, 0.5f, 0.0f);   // face centre, box spans y 0..1
+		const float cornerU[4] = { -0.5f, 0.5f, 0.5f, -0.5f };
+		const float cornerV[4] = { -0.5f, -0.5f, 0.5f, 0.5f };
+		for (int k = 0; k < 4; ++k) {
+			positions.push_back(centre + f.u * cornerU[k] + f.v * cornerV[k]);
+			normals.push_back(f.n);
+			uvs.push_back(Vector2(cornerU[k] + 0.5f, cornerV[k] + 0.5f));
+		}
+		indices.push_back(first); indices.push_back(first + 1); indices.push_back(first + 2);
+		indices.push_back(first); indices.push_back(first + 2); indices.push_back(first + 3);
+	}
+	return new ProceduralMesh(positions, uvs, indices, &normals);
+}

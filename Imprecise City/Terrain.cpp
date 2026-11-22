@@ -75,7 +75,7 @@ float Terrain::IslandHeight(float x, float z) {
 	return kSeabedHeight + (landHeight - kSeabedHeight) * land;
 }
 
-Terrain::Terrain(const RoadPath& road, int gridSize, float cellSize)
+Terrain::Terrain(const RoadPath& road, const TerrainPlateau& plateau, int gridSize, float cellSize)
 	: gridSize(gridSize),
 	  cellSize(cellSize),
 	  halfExtent((gridSize - 1) * 0.5f * cellSize),
@@ -88,43 +88,69 @@ Terrain::Terrain(const RoadPath& road, int gridSize, float cellSize)
 		}
 	}
 
+	// City site: level a disc first, then carve the road, so the road inside the city lies on flat ground.
+	if (plateau.outer > plateau.inner) {
+		for (int z = 0; z < gridSize; ++z) {
+			for (int x = 0; x < gridSize; ++x) {
+				const float dx = x * cellSize - halfExtent - plateau.x;
+				const float dz = z * cellSize - halfExtent - plateau.z;
+				const float w  = 1.0f - Smoothstep(plateau.inner, plateau.outer, std::sqrt(dx * dx + dz * dz));
+				float& height  = heights[static_cast<size_t>(z) * gridSize + x];
+				height += (plateau.y - height) * w;
+			}
+		}
+	}
+
 	CarveRoad(road);
 	BuildChunks();
 }
 
 void Terrain::CarveRoad(const RoadPath& road) {
-	const float flatHalfWidth = 16.0f;   // fully level out to here (road half-width 5 plus a cell of margin)
+	const float flatHalfWidth = 16.0f;   // fully level out to here (road half-width 5 plus margin)
 	const float shoulderWidth = 52.0f;   // blends back to the natural terrain by here
-	const float roadBedOffset = -0.35f;
+	const float roadBedOffset = -0.25f;  // terrain sits a little below the asphalt so it never pokes through
 	const int   radius = static_cast<int>(std::ceil(shoulderWidth / cellSize)) + 1;
 
-	// For every grid vertex remember the closest road sample and that sample's height.
-	// Splatting from each road point to the few vertices around it is far cheaper than
-	// testing every vertex against every road point.
+	// For every grid vertex remember the closest point on the road and the road height there.
+	// Each road SEGMENT is splatted onto the few vertices around it (far cheaper than testing every
+	// vertex against every road point). Using the closest point on the segment, with the height
+	// interpolated along it, keeps the terrain exactly under the asphalt on bends and slopes
+	// (using the nearest sample's height left small gaps there).
 	const size_t count = heights.size();
 	std::vector<float> nearest(count, std::numeric_limits<float>::max());
 	std::vector<float> roadHeight(count, 0.0f);
 
-	for (const Vector3& p : road.GetPoints()) {
-		const int cx = static_cast<int>(std::floor((p.x + halfExtent) / cellSize));
-		const int cz = static_cast<int>(std::floor((p.z + halfExtent) / cellSize));
+	const std::vector<Vector3>& pts = road.GetPoints();
+	const size_t n        = pts.size();
+	const size_t segments = road.IsClosed() ? n : n - 1;
 
-		for (int dz = -radius; dz <= radius; ++dz) {
-			const int iz = cz + dz;
-			if (iz < 0 || iz >= gridSize) continue;
+	for (size_t s = 0; s < segments; ++s) {
+		const Vector3& a = pts[s];
+		const Vector3& b = pts[(s + 1) % n];
+		const float abx = b.x - a.x, abz = b.z - a.z;
+		const float abLenSq = std::max(abx * abx + abz * abz, 1e-6f);
 
-			for (int dx = -radius; dx <= radius; ++dx) {
-				const int ix = cx + dx;
-				if (ix < 0 || ix >= gridSize) continue;
+		const int minX = static_cast<int>(std::floor((std::min(a.x, b.x) + halfExtent) / cellSize)) - radius;
+		const int maxX = static_cast<int>(std::floor((std::max(a.x, b.x) + halfExtent) / cellSize)) + radius;
+		const int minZ = static_cast<int>(std::floor((std::min(a.z, b.z) + halfExtent) / cellSize)) - radius;
+		const int maxZ = static_cast<int>(std::floor((std::max(a.z, b.z) + halfExtent) / cellSize)) + radius;
 
-				const float ox = ix * cellSize - halfExtent - p.x;
-				const float oz = iz * cellSize - halfExtent - p.z;
+		for (int iz = std::max(minZ, 0); iz <= std::min(maxZ, gridSize - 1); ++iz) {
+			for (int ix = std::max(minX, 0); ix <= std::min(maxX, gridSize - 1); ++ix) {
+				const float px = ix * cellSize - halfExtent;
+				const float pz = iz * cellSize - halfExtent;
+
+				// Closest point on the segment a-b (in the ground plane): clamp the projection to [0,1].
+				float t = ((px - a.x) * abx + (pz - a.z) * abz) / abLenSq;
+				t = std::min(std::max(t, 0.0f), 1.0f);
+				const float ox = px - (a.x + abx * t);
+				const float oz = pz - (a.z + abz * t);
 				const float dist = std::sqrt(ox * ox + oz * oz);
 
 				const size_t i = static_cast<size_t>(iz) * gridSize + ix;
 				if (dist < nearest[i]) {
 					nearest[i] = dist;
-					roadHeight[i] = p.y;
+					roadHeight[i] = a.y + (b.y - a.y) * t;
 				}
 			}
 		}

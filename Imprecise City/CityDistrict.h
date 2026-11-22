@@ -1,0 +1,30 @@
+#pragma once
+
+#include "SceneObject.h"
+#include "ProceduralMesh.h"
+
+/*
+A group of city instances (buildings / lamp parts) in one area, drawn with ONE instanced draw call.
+Every district is its own scene node with its own bounding sphere, so districts outside the view
+(or outside the sun's shadow box) are culled exactly like terrain chunks.
+
+The instance data lives in this district's shader storage buffer; Draw() binds it to binding 0,
+where instance.glslh expects it.
+*/
+class CityDistrict : public SceneObject {
+public:
+	CityDistrict(ProceduralMesh* unitBox, GLuint instanceBuffer, int instanceCount)
+		: SceneObject(unitBox, Material::Building), box(unitBox), buffer(instanceBuffer), count(instanceCount) {}
+
+	void Draw(const OGLRenderer& /*renderer*/) override {
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer);
+		box->DrawInstanced(count);
+	}
+
+	int InstanceCount() const { return count; }
+
+private:
+	ProceduralMesh* box;
+	GLuint          buffer;
+	int             count;
+};

@@ -20,7 +20,15 @@ public:
 	               const std::vector<Vector2>& texCoords,
 	               const std::vector<unsigned int>& triangleIndices,
 	               const std::vector<Vector3>* normalsIn = nullptr);
+
+	// Draws the whole mesh 'instanceCount' times; the vertex shader reads per-instance data
+	// (gl_InstanceID) from a shader storage buffer the caller has bound.
+	void DrawInstanced(int instanceCount) const;
 };
+
+// A 1 x 1 x 1 box with its base on y = 0 (x and z from -0.5 to 0.5): hard-edged normals, 24 vertices.
+// Instanced buildings and lamp posts scale it per instance in the vertex shader.
+ProceduralMesh* BuildUnitBox();
 
 // A smooth "rounded box" (superellipsoid) with the given half-extents, centred on the origin.
 // roundness: 1 = ellipsoid, towards 0 = sharper box. Normals are analytic, so it reflects cleanly.

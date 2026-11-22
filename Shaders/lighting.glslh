@@ -48,9 +48,41 @@ float ShadowFactor(vec3 worldPos, vec3 N) {
 vec3 ApplyDirectional(vec3 albedo, vec3 N, float shadow) {
 	float ndl           = saturate(dot(N, sunDir.xyz));
 	vec3  skyAmbient    = fogColour.rgb * 0.45;
-	vec3  groundAmbient = vec3(0.12, 0.11, 0.10);
-	vec3  ambient       = lerp(groundAmbient, skyAmbient, N.y * 0.5 + 0.5);
+	vec3  groundAmbient = vec3(0.12, 0.11, 0.10) * environment.w;   // darker ground bounce at night
+	vec3  ambient       = lerp(groundAmbient, skyAmbient, N.y * 0.5 + 0.5)
+	                    + vec3(0.02, 0.025, 0.05) * environment.x;    // faint blue "moonlit sky" floor so night is never pure black
 	return albedo * (ambient + sunColour.rgb * sunDir.w * ndl * shadow);
+}
+
+// Local lights: street lamps (point) and car headlights (spot). Counts come from the frame UBO,
+// so by day (no lights on) the loops do nothing. Cheap falloff: linear fade squared, zero at the radius.
+vec3 ApplyLights(vec3 albedo, vec3 N, vec3 worldPos) {
+	vec3 sum = vec3(0.0);
+
+	int pointCount = int(environment.y);
+	for (int i = 0; i < pointCount; ++i) {
+		vec3  toLight = pointLights[i].posRadius.xyz - worldPos;
+		float dist    = max(length(toLight), 0.001);
+		float falloff = saturate(1.0 - dist / pointLights[i].posRadius.w);
+		sum += pointLights[i].colour.rgb * (saturate(dot(N, toLight / dist)) * falloff * falloff);
+	}
+
+	int spotCount = int(environment.z);
+	for (int i = 0; i < spotCount; ++i) {
+		vec3  toLight = spotLights[i].posRange.xyz - worldPos;
+		float dist    = max(length(toLight), 0.001);
+		vec3  L       = toLight / dist;
+		// 1 inside the inner cone, fading to 0 at the outer cone.
+		float cone    = smoothstep(spotLights[i].colourCosOuter.w, spotLights[i].dirCosInner.w, dot(-L, spotLights[i].dirCosInner.xyz));
+		float falloff = saturate(1.0 - dist / spotLights[i].posRange.w);
+		sum += spotLights[i].colourCosOuter.rgb * (saturate(dot(N, L)) * cone * falloff * falloff);
+	}
+	return albedo * sum;
+}
+
+// Everything that lights a surface: the sun (with shadows), ambient, and the local lights.
+vec3 ApplyLighting(vec3 albedo, vec3 N, vec3 worldPos, float shadow) {
+	return ApplyDirectional(albedo, N, shadow) + ApplyLights(albedo, N, worldPos);
 }
 
 // Exponential-squared fog: clear nearby, fades smoothly into the sky colour.
