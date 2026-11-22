@@ -1,0 +1,33 @@
+// Water shading shared by the sea now, and by the puddle / boat later.
+// Needs support.glslh included first.
+
+// Analytic normal for three directional wave trains. Summing slopes (the gradient) instead of
+// sampling a height field means no textures and no finite differences. Each train fades out
+// before its wavelength shrinks to a few pixels, which is what keeps the horizon from shimmering.
+vec3 WaterNormal(vec2 xz, float time, float distance) {
+	vec2 dA = normalize(vec2( 1.00,  0.35));
+	vec2 dB = normalize(vec2(-0.55,  1.00));
+	vec2 dC = normalize(vec2( 0.30, -1.00));
+
+	const float kA = 6.2831853 / 19.0;   // wavelength 19 m
+	const float kB = 6.2831853 / 9.5;    // 9.5 m
+	const float kC = 6.2831853 / 4.7;    // 4.7 m
+
+	float fadeA = saturate(1.0 - distance / 2800.0); fadeA *= fadeA;
+	float fadeB = saturate(1.0 - distance / 1300.0); fadeB *= fadeB;
+	float fadeC = saturate(1.0 - distance /  650.0); fadeC *= fadeC;
+
+	vec2 slope = vec2(0.0);
+	slope += dA * (0.110 * fadeA) * cos(dot(dA, xz) * kA - time * 2.2);   // ~6.7 m/s
+	slope += dB * (0.070 * fadeB) * cos(dot(dB, xz) * kB - time * 2.8);   // ~4.2 m/s
+	slope += dC * (0.045 * fadeC) * cos(dot(dC, xz) * kC - time * 3.4);   // ~2.5 m/s
+
+	return normalize(vec3(-slope.x, 1.0, -slope.y));
+}
+
+// Sparse twinkles that ride on the wave slopes; multiplied into the tight sun highlight.
+float WaterGlitter(vec2 xz, float time) {
+	vec2 p = xz * 2.3 + vec2(time * 1.7, -time * 1.1);
+	float n = ValueNoise(p) * ValueNoise(p * 2.1 + 7.3);
+	return smoothstep(0.55, 0.75, n);
+}

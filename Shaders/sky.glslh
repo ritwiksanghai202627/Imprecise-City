@@ -5,6 +5,48 @@
 
 uniform vec3 zenithColour;   // sky colour straight up; the horizon colour is the fog colour
 
+// Procedural clouds. Project the view direction onto a flat cloud deck, then evaluate four
+// octaves of value noise. Returns rgb + coverage so SkyColour can composite them over the sun.
+// Only sampled above the horizon, and faded out near it to hide the stretched, aliasing-prone
+// band where the projection compresses to infinity.
+vec4 CloudLayer(vec3 d) {
+	float above = smoothstep(0.005, 0.06, d.y);
+	if (above <= 0.0) {
+		return vec4(0.0);
+	}
+
+	// d.y + 0.35 keeps the projection finite at the zenith (a pure d.xz / d.y pinches badly).
+	vec2 p = d.xz / (d.y + 0.35) * 1.6;
+	p += vec2(0.006, 0.0025) * timeInfo.x;   // slow drift
+
+	float n   = 0.0;
+	float amp = 0.5;
+	for (int i = 0; i < 4; ++i) {
+		n += amp * ValueNoise(p);
+		p = mat2(0.80, -0.60, 0.60, 0.80) * p * 2.07 + vec2(13.7, 7.3);   // rotate, so octaves do not line up
+		amp *= 0.5;
+	}
+
+	float cover = smoothstep(0.50, 0.62, n);
+	if (cover <= 0.0) {
+		return vec4(0.0);
+	}
+
+	// Cheap directional lighting: the side towards the sun is bright, the rest is shaded by the
+	// zenith colour. The wide term keeps clouds readable at dusk.
+	float sunAmount = saturate(dot(d, sunDir.xyz) * 0.5 + 0.5);
+	vec3  lit   = lerp(fogColour.rgb, vec3(1.05, 1.03, 0.99), 0.65) * (0.55 + 0.55 * sunAmount);
+	vec3  shade = lerp(zenithColour, fogColour.rgb, 0.30) * 0.85;
+	vec3  cloud = lerp(shade, lit, smoothstep(0.38, 0.72, n));
+
+	// Silver lining towards the sun; at night this is the moon, so it stays subtle.
+	cloud += sunColour.rgb * sunDir.w * pow(saturate(dot(d, sunDir.xyz)), 24.0) * 0.45;
+
+	// Clouds are silhouettes at night, not white.
+	cloud *= lerp(1.0, 0.12, environment.x);
+	return vec4(cloud, cover * above);
+}
+
 // groundAmount: 1 for the environment map (reflections see a dim ground below the horizon),
 // 0 for the visible sky, where "below the horizon" must match the fogged sea, so it stays fog colour.
 vec3 SkyColour(vec3 d, float groundAmount) {
@@ -18,5 +60,9 @@ vec3 SkyColour(vec3 d, float groundAmount) {
 	// Sun: a small bright disc plus a wide soft glow.
 	float s = saturate(dot(d, sunDir.xyz));
 	col += sunColour.rgb * sunDir.w * (0.30 * pow(s, 8.0) + 10.0 * pow(s, 2000.0));
+
+	// Clouds sit in front of the sun, so they composite over the disc and glow.
+	vec4 cloud = CloudLayer(d);
+	col = lerp(col, cloud.rgb, cloud.a);
 	return col;
 }
