@@ -33,6 +33,11 @@ namespace {
 	const float kLookAhead     = 12.0f;
 	const float kLookHeight    = 1.5f;
 
+	// Free-camera fly speed: held left / right mouse button ramps it at runtime.
+	const float kFlySpeedRate = 1.0f;    // e-fold per second of holding (right = faster, left = slower)
+	const float kFlySpeedMin  = 0.05f;   // slowest (fine placement)
+	const float kFlySpeedMax  = 20.0f;   // fastest (overview shots)
+
 	// Shadow map tuning
 	const int   kShadowMapSize      = 2048;
 	const float kShadowLightDistance = 800.0f;   // how far from the focus point the sun camera sits
@@ -656,7 +661,16 @@ void Renderer::UpdateCinematicCamera() {
 }
 
 void Renderer::UpdateFreeCamera(float dt) {
-	camera.UpdateCamera(dt * 1000.0f);   // nclgl camera takes milliseconds
+	// Held left / right mouse button ramps the fly speed. Exponential, so one second of
+	// holding changes the speed by the same factor whatever it currently is; clamped, so it
+	// can neither crawl to a stop nor overshoot the island. This is the runtime version of
+	// editing "msec *= 1.0f" in nclgl/Camera.cpp and rebuilding; that file stays stock.
+	auto* mouse = Window::GetMouse();
+	if (mouse->ButtonDown(MOUSE_LEFT))  { freeCameraSpeed *= std::exp(-kFlySpeedRate * dt); }
+	if (mouse->ButtonDown(MOUSE_RIGHT)) { freeCameraSpeed *= std::exp( kFlySpeedRate * dt); }
+	freeCameraSpeed = std::min(std::max(freeCameraSpeed, kFlySpeedMin), kFlySpeedMax);
+
+	camera.UpdateCamera(dt * 1000.0f * freeCameraSpeed);   // nclgl camera takes milliseconds
 
 	// Stay above the ground and the sea.
 	Vector3 p = camera.GetPosition();
@@ -708,14 +722,15 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 
 	char title[420];
 	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s",
+		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s | fly %.2fx",
 		titleFrames / titleTimer, average, low, high,
 		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
 		static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
 		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent],
 		cullingFrozen ? "FROZEN" : "camera",
 		shadowsEnabled ? "on" : "off",
-		cameraMode == CameraMode::Cinematic ? "cinematic" : "free");
+		cameraMode == CameraMode::Cinematic ? "cinematic" : "free",
+		freeCameraSpeed);
 	if (HWND window = GetActiveWindow()) {
 		SetWindowTextA(window, title);
 	}

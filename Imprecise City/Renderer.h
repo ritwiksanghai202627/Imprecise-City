@@ -113,6 +113,7 @@ private:
 	// Camera
 	Camera     camera;               // nclgl free-fly camera
 	CameraMode cameraMode = CameraMode::Cinematic;
+	float      freeCameraSpeed = 1.0f;   // 1 = nclgl stock speed; left/right mouse button change it at runtime
 	Vector3    eyePosition;
 	Vector3    lookTarget;
 
