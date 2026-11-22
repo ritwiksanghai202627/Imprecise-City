@@ -1,0 +1,20 @@
+// One analytic sky, used twice: drawn behind the scene (skyFragment) and baked into the
+// environment cube map that shiny objects reflect (bakeSkyFragment). Using the same function
+// guarantees the reflections match what you see in the sky.
+// Needs frame.glslh and support.glslh included first.
+
+uniform vec3 zenithColour;   // sky colour straight up; the horizon colour is the fog colour
+
+vec3 SkyColour(vec3 d) {
+	vec3  horizon = fogColour.rgb;
+	float up      = saturate(d.y);
+	vec3  col     = lerp(horizon, zenithColour, pow(up, 0.45));
+
+	// Below the horizon there is no sky: a dim ground colour (only ever visible in reflections).
+	col = lerp(col, vec3(0.16, 0.19, 0.13), saturate(-d.y * 6.0));
+
+	// Sun: a small bright disc plus a wide soft glow.
+	float s = saturate(dot(d, sunDir.xyz));
+	col += sunColour.rgb * sunDir.w * (0.30 * pow(s, 8.0) + 10.0 * pow(s, 2000.0));
+	return col;
+}

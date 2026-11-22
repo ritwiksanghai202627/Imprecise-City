@@ -168,6 +168,7 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AnimatedModel.cpp" />
     <ClCompile Include="ImpreciseCity.cpp" />
     <ClCompile Include="ProceduralMesh.cpp" />
     <ClCompile Include="Renderer.cpp" />
@@ -175,10 +176,12 @@
     <ClCompile Include="Terrain.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AnimatedModel.h" />
     <ClInclude Include="ProceduralMesh.h" />
     <ClInclude Include="Renderer.h" />
     <ClInclude Include="RoadPath.h" />
     <ClInclude Include="SceneObject.h" />
+    <ClInclude Include="SkinnedObject.h" />
     <ClInclude Include="Terrain.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -21,3 +21,7 @@ public:
 	               const std::vector<unsigned int>& triangleIndices,
 	               const std::vector<Vector3>* normalsIn = nullptr);
 };
+
+// A smooth "rounded box" (superellipsoid) with the given half-extents, centred on the origin.
+// roundness: 1 = ellipsoid, towards 0 = sharper box. Normals are analytic, so it reflects cleanly.
+ProceduralMesh* BuildRoundedBox(const Vector3& radii, float roundness, int stacks, int slices);

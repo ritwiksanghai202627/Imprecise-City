@@ -4,6 +4,8 @@
 #include "../nclgl/Camera.h"
 #include "../nclgl/Frustum.h"
 #include "SceneObject.h"
+#include "AnimatedModel.h"
+#include "SkinnedObject.h"
 
 #include <chrono>
 #include <memory>
@@ -60,7 +62,15 @@ private:
 	void ClearNodeLists();
 	void DrawNodes(const std::vector<SceneObject*>& list);
 	void DrawNode(SceneObject* node);
+	void DrawSkinned(SkinnedObject* node);
 	void BindMaterial(Material material);
+
+	// Sky, environment map, characters
+	void BuildEnvironmentMap();   // bakes the sky into a cube map (once; again when the sun moves)
+	void DrawSky();
+	void CreateWhiteTexture();
+	void BuildWalkers();
+	void UpdateWalkers(float dt);
 
 	// Camera and per-frame
 	void   UpdateCinematicCamera();
@@ -86,6 +96,18 @@ private:
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
 
+	// Animated characters: one shared model, several instances walking along the verge of the road
+	struct Walker {
+		SkinnedObject* node;
+		float distance;    // metres along the road
+		float direction;   // +1 or -1
+		float minDistance, maxDistance;
+		float side;        // sideways offset from the road centre line (metres, + = right)
+		float speed;       // metres per second
+	};
+	std::unique_ptr<AnimatedModel> walkerModel;
+	std::vector<Walker>            walkers;
+
 	// Scene graph: declared after the meshes, so it is destroyed before them
 	std::unique_ptr<SceneNode> root;
 	SceneObject*               carNode = nullptr;
@@ -110,7 +132,11 @@ private:
 
 	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
+	std::unique_ptr<Shader> carShader, skinnedShader, skinnedShadowShader, skyShader, bakeSkyShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
+	GLuint whiteTexture = 0;           // 1x1 white, bound when a model has no texture
+	GLuint envCube = 0;                // sky baked into a cube map, reflected by the car
+	Vector3 zenithColour;              // sky colour straight up (horizon colour = fog colour)
 	GLuint activeProgram = 0;
 
 	// Material binding cache (uniform locations are looked up once per material switch)
@@ -118,6 +144,7 @@ private:
 	Material boundMaterial = Material::Terrain;
 	GLint    modelLoc  = -1;
 	GLint    colourLoc = -1;
+	GLint    jointsLoc = -1;   // bone matrix array, skinned material only
 
 	// Frame data
 	GLuint frameUBO = 0;

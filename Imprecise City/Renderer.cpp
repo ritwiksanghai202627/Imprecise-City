@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include "RoadPath.h"
 #include "Terrain.h"
+#include "ProceduralMesh.h"
 
 #include <algorithm>
 #include <cmath>
@@ -46,14 +47,20 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	terrain = std::make_unique<Terrain>(*road);
 	roadMesh.reset(road->BuildRibbon(5.0f, 0.15f, 8.0f));
 
-	carMesh.reset(Mesh::LoadFromMeshFile("Cube.msh"));
-	seaMesh.reset(Mesh::GenerateQuad());
+	// Placeholder car body: a smooth rounded box (so reflections look right), 2 x 1.1 x 4.4 m.
+	carMesh.reset(BuildRoundedBox(Vector3(1.0f, 0.55f, 2.2f), 0.35f, 24, 48));
+	seaMesh.reset(Mesh::GenerateQuad());   // also used as the full-screen quad for the sky
 
 	terrainShader = std::make_unique<Shader>("sceneVertex.glsl", "terrainFragment.glsl");
 	roadShader    = std::make_unique<Shader>("sceneVertex.glsl", "roadFragment.glsl");
 	seaShader     = std::make_unique<Shader>("sceneVertex.glsl", "seaFragment.glsl");
 	litShader     = std::make_unique<Shader>("sceneVertex.glsl", "litFragment.glsl");
 	shadowShader  = std::make_unique<Shader>("shadowVertex.glsl", "shadowFragment.glsl");
+	carShader     = std::make_unique<Shader>("sceneVertex.glsl", "carFragment.glsl");
+	skinnedShader = std::make_unique<Shader>("skinnedVertex.glsl", "skinnedFragment.glsl");
+	skinnedShadowShader = std::make_unique<Shader>("skinnedShadowVertex.glsl", "shadowFragment.glsl");
+	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
+	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
 	grassTexture = LoadTexture("grass.png");
 	sandTexture  = LoadTexture("sand.png");
@@ -61,12 +68,16 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 
 	if (!carMesh || !terrainShader->LoadSuccess() || !roadShader->LoadSuccess() ||
 	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() || !shadowShader->LoadSuccess() ||
+	    !carShader->LoadSuccess() || !skinnedShader->LoadSuccess() || !skinnedShadowShader->LoadSuccess() ||
+	    !skyShader->LoadSuccess() || !bakeSkyShader->LoadSuccess() ||
 	    !grassTexture || !sandTexture || !rockTexture) {
 		std::cout << "Renderer: resource loading failed, see messages above.\n";
 		return;   // init stays false, so main() exits cleanly
 	}
 
+	CreateWhiteTexture();
 	BuildScene();
+	BuildWalkers();
 	CreateShadowMap();
 
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
@@ -84,6 +95,9 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	frameData.sunColour = Vector4(1.0f, 0.95f, 0.85f, 1.0f);
 	frameData.fogColour = Vector4(0.62f, 0.75f, 0.90f, 0.00045f);
 
+	zenithColour = Vector3(0.18f, 0.40f, 0.78f);
+	BuildEnvironmentMap();   // needs the frame UBO and the sun / fog values above
+
 	glEnable(GL_DEPTH_TEST);
 	glClearColor(0.62f, 0.75f, 0.90f, 1.0f);
 
@@ -98,6 +112,8 @@ Renderer::~Renderer() {
 	glDeleteTextures(1, &grassTexture);
 	glDeleteTextures(1, &sandTexture);
 	glDeleteTextures(1, &rockTexture);
+	glDeleteTextures(1, &whiteTexture);
+	glDeleteTextures(1, &envCube);
 	glDeleteBuffers(1, &frameUBO);
 	glDeleteTextures(1, &shadowTex);
 	glDeleteFramebuffers(1, &shadowFBO);
@@ -109,6 +125,7 @@ Renderer::~Renderer() {
 //   |     +-- 64 terrain chunks (each with its own bounding sphere)
 //   +-- road
 //   +-- car
+//   +-- walkers (skinned, animated people; see BuildWalkers)
 //   +-- sea (transparent list)
 // Only nodes with a mesh are drawn or culled. Grouping nodes exist so later batches can
 // hang things (wheels on the car, buildings in a district) off one parent transform.
@@ -130,9 +147,8 @@ void Renderer::BuildScene() {
 	roadNode->SetCastsShadow(false);   // a thin ribbon on the ground: it receives shadows but need not cast them
 	root->AddChild(roadNode);
 
-	// Assumes Cube.msh spans -1..1, so this is a 2 x 1.2 x 4.4 box. Transform set every frame.
-	carNode = new SceneObject(carMesh.get(), Material::Lit, Vector4(0.75f, 0.08f, 0.08f, 1.0f));
-	carNode->SetModelScale(Vector3(1.0f, 0.6f, 2.2f));
+	// Reflective paint (Material::Car). The mesh already has the car's proportions. Transform set every frame.
+	carNode = new SceneObject(carMesh.get(), Material::Car, Vector4(0.75f, 0.08f, 0.08f, 1.0f));
 	carNode->SetBoundingRadius(3.0f);
 	root->AddChild(carNode);
 
@@ -143,6 +159,142 @@ void Renderer::BuildScene() {
 	seaNode->SetModelScale(Vector3(8000.0f, 8000.0f, 1.0f));
 	seaNode->SetBoundingRadius(12000.0f);
 	root->AddChild(seaNode);
+}
+
+void Renderer::CreateWhiteTexture() {
+	const unsigned char white[4] = { 255, 255, 255, 255 };
+	glGenTextures(1, &whiteTexture);
+	glBindTexture(GL_TEXTURE_2D, whiteTexture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);   // no mipmaps for a 1x1 texture
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// Renders the analytic sky (sky.glslh) into the six faces of a cube map. Reflective objects
+// sample it, so what they mirror is exactly what is drawn behind the scene. Runs once at
+// start-up; when time of day changes the sun, call it again.
+void Renderer::BuildEnvironmentMap() {
+	const int size = 128;
+	StartDebugGroup("Bake environment map");
+
+	if (!envCube) {
+		glGenTextures(1, &envCube);
+	}
+	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
+	for (int face = 0; face < 6; ++face) {
+		// 16-bit float, so the bright sun disc keeps values above 1 for reflections
+		glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, nullptr);
+	}
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+	glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
+	GLuint fbo = 0;
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glViewport(0, 0, size, size);
+
+	UploadFrameData();   // the bake shader reads the sun and fog from the frame UBO
+	Use(*bakeSkyShader);
+	glUniform3f(glGetUniformLocation(activeProgram, "zenithColour"), zenithColour.x, zenithColour.y, zenithColour.z);
+	const GLint faceLoc = glGetUniformLocation(activeProgram, "face");
+	for (int face = 0; face < 6; ++face) {
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, envCube, 0);
+		glUniform1i(faceLoc, face);
+		seaMesh->Draw();   // the full-screen quad
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glDeleteFramebuffers(1, &fbo);
+	glViewport(0, 0, width, height);
+
+	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
+	glGenerateMipmap(GL_TEXTURE_CUBE_MAP);   // blurrier mips = rougher reflections later
+	glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+	materialBound = false;   // we changed the active program outside BindMaterial
+	EndDebugGroup();
+}
+
+// Draws the sky last among the opaque things: depth test LEQUAL with the quad at depth 1.0 means
+// only pixels nothing else covered get shaded, so no fragment work is wasted behind the scene.
+void Renderer::DrawSky() {
+	glDisable(GL_POLYGON_OFFSET_FILL);
+	glDepthFunc(GL_LEQUAL);
+	glDepthMask(GL_FALSE);
+
+	Use(*skyShader);
+	Matrix4 rotationOnly = viewMatrix;   // drop the translation: the sky is infinitely far away
+	rotationOnly.values[12] = rotationOnly.values[13] = rotationOnly.values[14] = 0.0f;
+	const Matrix4 inverseProjView = (projMatrix * rotationOnly).Inverse();
+	glUniformMatrix4fv(glGetUniformLocation(activeProgram, "inverseProjView"), 1, false, inverseProjView.values);
+	glUniform3f(glGetUniformLocation(activeProgram, "zenithColour"), zenithColour.x, zenithColour.y, zenithColour.z);
+	seaMesh->Draw();
+
+	glDepthMask(GL_TRUE);
+	glDepthFunc(GL_LESS);
+	materialBound = false;
+}
+
+// A few CesiumMan instances strolling along the road verge. When the final character model
+// arrives, only the path / fix matrix / scale in the next few lines change.
+void Renderer::BuildWalkers() {
+	walkerModel = std::make_unique<AnimatedModel>();
+	// Z-up model, ~1.5 units tall: scale 1.2 makes a 1.8 m person.
+	if (!walkerModel->Load("../GLTF/CesiumMan/CesiumMan.gltf", AnimatedModel::ZUpFix(1.2f))) {
+		std::cout << "Renderer: walkers disabled (copy the GLTF folder next to the solution, see HANDOFF.md)\n";
+		walkerModel.reset();
+		return;
+	}
+
+	const float startDistance[4] = {  35.0f,  60.0f,  85.0f, 120.0f };
+	const float side[4]          = {   8.0f,  -8.0f,   9.0f,  -9.0f };
+	const float duration = walkerModel->ClipDuration(0);
+
+	for (int i = 0; i < 4; ++i) {
+		// Different start times, so the walkers are not in lock-step.
+		SkinnedObject* node = new SkinnedObject(walkerModel.get(), 0, duration * 0.27f * i, 1.0f);
+		root->AddChild(node);
+
+		Walker w;
+		w.node        = node;
+		w.distance    = startDistance[i];
+		w.direction   = (i % 2 == 0) ? 1.0f : -1.0f;
+		w.minDistance = startDistance[i] - 25.0f;
+		w.maxDistance = startDistance[i] + 25.0f;
+		w.side        = side[i];
+		w.speed       = 1.3f;
+		walkers.push_back(w);
+	}
+	UpdateWalkers(0.0f);   // so the first frame already has them in place
+}
+
+void Renderer::UpdateWalkers(float dt) {
+	for (Walker& w : walkers) {
+		w.distance += w.direction * w.speed * dt;
+		if (w.distance > w.maxDistance) { w.distance = w.maxDistance; w.direction = -1.0f; }
+		if (w.distance < w.minDistance) { w.distance = w.minDistance; w.direction =  1.0f; }
+
+		const Vector3 centre = road->PositionAt(w.distance);
+		Vector3 along = road->DirectionAt(w.distance);
+		along.y = 0.0f;
+		const float len = std::sqrt(along.x * along.x + along.z * along.z);
+		along = along * (1.0f / len);
+
+		// "Right of the road" for a road heading along -Z at yaw 0 is +X: right = (-z, 0, x).
+		const float px = centre.x + (-along.z) * w.side;
+		const float pz = centre.z + ( along.x) * w.side;
+		const float py = terrain->HeightAt(px, pz);
+
+		const Vector3 heading = along * w.direction;   // the way the person faces
+		w.node->SetTransform(
+			Matrix4::Translation(Vector3(px, py, pz)) *
+			Matrix4::Rotation(YawFromDirection(heading), Vector3(0, 1, 0)));
+	}
 }
 
 GLuint Renderer::LoadTexture(const std::string& fileName) {
@@ -183,6 +335,7 @@ void Renderer::UpdateScene(float /*dt*/) {
 
 	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, 60.0f);
 
+	UpdateWalkers(dt);   // set the walkers' transforms before the graph recomputes world matrices
 	root->Update(dt);   // recomputes every node's world transform from its parent's
 
 	if (!cullingFrozen) {
@@ -202,7 +355,7 @@ void Renderer::UpdateCar(float dt) {
 	const Vector3 pos = road->PositionAt(carDistance);
 	const Vector3 dir = road->DirectionAt(carDistance);
 	carNode->SetTransform(
-		Matrix4::Translation(pos + Vector3(0.0f, 0.65f, 0.0f)) *
+		Matrix4::Translation(pos + Vector3(0.0f, 0.6f, 0.0f)) *
 		Matrix4::Rotation(YawFromDirection(dir), Vector3(0, 1, 0)) *
 		Matrix4::Rotation(PitchFromDirection(dir), Vector3(1, 0, 0)));
 }
@@ -388,11 +541,36 @@ void Renderer::RenderShadowPass() {
 
 	Use(*shadowShader);
 	const GLint shadowModelLoc = glGetUniformLocation(activeProgram, "modelMatrix");
+	bool anySkinned = false;
 	for (SceneObject* node : shadowCasterList) {
+		if (node->GetMaterial() == Material::Skinned) {
+			anySkinned = true;   // drawn below with the skinning shader
+			continue;
+		}
 		const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
 		glUniformMatrix4fv(shadowModelLoc, 1, false, model.values);
 		node->Draw(*this);
 		++stats.shadowDraws;
+	}
+
+	if (anySkinned) {
+		Use(*skinnedShadowShader);
+		const GLint skinModelLoc  = glGetUniformLocation(activeProgram, "modelMatrix");
+		const GLint skinJointsLoc = glGetUniformLocation(activeProgram, "joints");
+		for (SceneObject* node : shadowCasterList) {
+			if (node->GetMaterial() != Material::Skinned) {
+				continue;
+			}
+			SkinnedObject* skinned = static_cast<SkinnedObject*>(node);   // valid: only SkinnedObject uses Material::Skinned
+			const Matrix4 model = skinned->GetWorldTransform() * skinned->GetModel().GetFix();
+			glUniformMatrix4fv(skinModelLoc, 1, false, model.values);
+			const std::vector<Matrix4>& pose = skinned->GetPose();
+			glUniformMatrix4fv(skinJointsLoc, (GLsizei)pose.size(), false, pose[0].values);
+			for (int i = 0; i < skinned->GetModel().SubMeshCount(); ++i) {
+				skinned->GetMesh()->DrawSubMesh(i);
+			}
+			++stats.shadowDraws;
+		}
 	}
 
 	glDisable(GL_POLYGON_OFFSET_FILL);
@@ -436,6 +614,8 @@ void Renderer::BindMaterial(Material material) {
 			break;
 		case Material::Road: Use(*roadShader); break;
 		case Material::Lit:  Use(*litShader);  break;
+		case Material::Car:  Use(*carShader);  break;
+		case Material::Skinned: Use(*skinnedShader); break;
 		case Material::Sea:  Use(*seaShader);  break;
 	}
 
@@ -451,12 +631,40 @@ void Renderer::BindMaterial(Material material) {
 	// Uniform locations are fixed per program, so look them up here, not per draw.
 	modelLoc  = glGetUniformLocation(activeProgram, "modelMatrix");
 	colourLoc = glGetUniformLocation(activeProgram, "baseColour");   // -1 if the shader has none
+	jointsLoc = glGetUniformLocation(activeProgram, "joints");       // only the skinning shader has bones
 
 	boundMaterial = material;
 	materialBound = true;
 }
 
+// A skinned character: upload this instance's bone matrices, then draw each sub-mesh with its
+// own glTF material (texture and/or colour factor). Sub-mesh n uses material layer n.
+void Renderer::DrawSkinned(SkinnedObject* node) {
+	BindMaterial(Material::Skinned);
+
+	const AnimatedModel& model = node->GetModel();
+	const Matrix4 world = node->GetWorldTransform() * model.GetFix();
+	glUniformMatrix4fv(modelLoc, 1, false, world.values);
+
+	const std::vector<Matrix4>& pose = node->GetPose();
+	glUniformMatrix4fv(jointsLoc, (GLsizei)pose.size(), false, pose[0].values);
+
+	glActiveTexture(GL_TEXTURE0);
+	for (int i = 0; i < model.SubMeshCount(); ++i) {
+		const GLTFMaterialLayer& layer = model.Layer(i);
+		glBindTexture(GL_TEXTURE_2D, layer.albedo ? layer.albedo->GetObjectID() : whiteTexture);
+		glUniform4f(colourLoc, layer.albedoColour.x, layer.albedoColour.y, layer.albedoColour.z, layer.albedoColour.w);
+		node->GetMesh()->DrawSubMesh(i);
+		++stats.drawCalls;
+	}
+	stats.triangles += node->GetMesh()->GetTriCount();
+}
+
 void Renderer::DrawNode(SceneObject* node) {
+	if (node->GetMaterial() == Material::Skinned) {
+		DrawSkinned(static_cast<SkinnedObject*>(node));   // valid: only SkinnedObject uses Material::Skinned
+		return;
+	}
 	BindMaterial(node->GetMaterial());
 
 	const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
@@ -491,6 +699,8 @@ void Renderer::RenderScene() {
 	// The shadow map lives on texture unit 4 for the whole main pass (see lighting.glslh).
 	glActiveTexture(GL_TEXTURE4);
 	glBindTexture(GL_TEXTURE_2D, shadowTex);
+	glActiveTexture(GL_TEXTURE5);   // the environment cube map lives on unit 5 (see carFragment.glsl)
+	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
 	glActiveTexture(GL_TEXTURE0);
 	materialBound = false;
 
@@ -501,6 +711,10 @@ void Renderer::RenderScene() {
 
 	StartDebugGroup("Opaque pass");
 	DrawNodes(opaqueList);
+	EndDebugGroup();
+
+	StartDebugGroup("Sky pass");
+	DrawSky();
 	EndDebugGroup();
 
 	StartDebugGroup("Transparent pass");

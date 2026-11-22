@@ -4,7 +4,7 @@
 
 // Which shader/material a drawable node uses. The renderer sorts opaque nodes by this
 // first, so each shader is bound once per frame instead of once per node.
-enum class Material { Terrain, Road, Lit, Sea };
+enum class Material { Terrain, Road, Lit, Car, Skinned, Sea };
 
 /*
 A SceneNode that knows how it should be drawn. nclgl's SceneNode only holds a mesh, a
