@@ -14,9 +14,9 @@ struct CityInstance {
 static_assert(sizeof(CityInstance) == 32, "CityInstance must match struct Instance in instance.glslh");
 
 namespace CityConst {
-	const float kPlateauInner = 135.0f;   // terrain is dead flat inside this radius
-	const float kPlateauOuter = 210.0f;   // ...and blends back to the natural hills by here
-	const float kCityRadius   = 125.0f;   // buildings stand inside this radius
+	const float kPlateauInner = 170.0f;   // terrain is dead flat inside this radius
+	const float kPlateauOuter = 255.0f;   // ...and blends back to the natural hills by here
+	const float kCityRadius   = 160.0f;   // buildings stand inside this radius
 }
 
 /*

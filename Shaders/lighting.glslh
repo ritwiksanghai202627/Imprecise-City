@@ -56,9 +56,12 @@ vec3 ApplyDirectional(vec3 albedo, vec3 N, float shadow) {
 
 // Local lights: street lamps (point) and car headlights (spot). Counts come from the frame UBO,
 // so by day (no lights on) the loops do nothing. Cheap falloff: linear fade squared, zero at the radius.
-vec3 ApplyLights(vec3 albedo, vec3 N, vec3 worldPos) {
-	vec3 sum = vec3(0.0);
+// Beyond 250 m from the camera the lights are skipped: fog hides their effect and overview shots
+// (the most pixel-heavy ones) stay cheap.
+const float LIGHT_CULL_DISTANCE = 250.0;
 
+vec3 ApplyPointLights(vec3 albedo, vec3 N, vec3 worldPos) {
+	vec3 sum = vec3(0.0);
 	int pointCount = int(environment.y);
 	for (int i = 0; i < pointCount; ++i) {
 		vec3  toLight = pointLights[i].posRadius.xyz - worldPos;
@@ -66,7 +69,11 @@ vec3 ApplyLights(vec3 albedo, vec3 N, vec3 worldPos) {
 		float falloff = saturate(1.0 - dist / pointLights[i].posRadius.w);
 		sum += pointLights[i].colour.rgb * (saturate(dot(N, toLight / dist)) * falloff * falloff);
 	}
+	return albedo * sum;
+}
 
+vec3 ApplySpotLights(vec3 albedo, vec3 N, vec3 worldPos) {
+	vec3 sum = vec3(0.0);
 	int spotCount = int(environment.z);
 	for (int i = 0; i < spotCount; ++i) {
 		vec3  toLight = spotLights[i].posRange.xyz - worldPos;
@@ -78,6 +85,13 @@ vec3 ApplyLights(vec3 albedo, vec3 N, vec3 worldPos) {
 		sum += spotLights[i].colourCosOuter.rgb * (saturate(dot(N, L)) * cone * falloff * falloff);
 	}
 	return albedo * sum;
+}
+
+vec3 ApplyLights(vec3 albedo, vec3 N, vec3 worldPos) {
+	if (environment.y + environment.z < 0.5 || length(worldPos - cameraPos.xyz) > LIGHT_CULL_DISTANCE) {
+		return vec3(0.0);
+	}
+	return ApplyPointLights(albedo, N, worldPos) + ApplySpotLights(albedo, N, worldPos);
 }
 
 // Everything that lights a surface: the sun (with shadows), ambient, and the local lights.

@@ -138,8 +138,8 @@ private:
 	std::vector<TrafficCar> traffic;
 
 	// Time of day: hours 0..24. T jumps between presets, Y runs the clock.
-	float timeOfDay      = 12.0f;
-	bool  timeAuto       = false;
+	float timeOfDay      = 8.5f;    // starts on a bright morning
+	bool  timeAuto       = true;    // the clock runs by default (Y stops it)
 	int   timePreset     = 0;
 	float lastBakedHour  = -100.0f;   // the sky was last baked into the cube map at this hour
 	std::vector<std::pair<float, int>> lampScratch;   // reused every frame: (distance^2, lamp index)

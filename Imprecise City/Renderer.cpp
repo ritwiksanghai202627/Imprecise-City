@@ -27,6 +27,7 @@ namespace {
 
 	// Cinematic camera tuning
 	const float kCarSpeed      = 20.0f;   // metres per second
+	const float kPlayerLane    = 2.6f;    // the player drives in the right-hand lane, like the traffic
 	const float kCamBehind     = 16.0f;
 	const float kCamHeight     = 4.5f;
 	const float kLookAhead     = 12.0f;
@@ -64,7 +65,14 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	Vector3 cityCentre;
 	float   cityRoadDistance = 0.0f;
 	TerrainPlateau plateau;
-	const bool cityFound = City::ChooseSite(*road, &Terrain::IslandHeight, CityConst::kPlateauInner, cityCentre, cityRoadDistance);
+	// Try a big flat site first, then settle for smaller ring checks if the coast is in the way.
+	bool cityFound = false;
+	for (float scale : { 1.0f, 0.8f, 0.6f }) {
+		cityFound = City::ChooseSite(*road, &Terrain::IslandHeight, CityConst::kPlateauInner * scale, cityCentre, cityRoadDistance);
+		if (cityFound) {
+			break;
+		}
+	}
 	if (cityFound) {
 		road->FlattenAround(cityCentre, CityConst::kPlateauInner, CityConst::kPlateauOuter, cityCentre.y);
 		plateau.x = cityCentre.x; plateau.z = cityCentre.z; plateau.y = cityCentre.y;
@@ -82,7 +90,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	seaShader     = std::make_unique<Shader>("sceneVertex.glsl", "seaFragment.glsl");
 	litShader     = std::make_unique<Shader>("sceneVertex.glsl", "litFragment.glsl");
 	shadowShader  = std::make_unique<Shader>("shadowVertex.glsl", "shadowFragment.glsl");
-	carShader     = std::make_unique<Shader>("sceneVertex.glsl", "carFragment.glsl");
+	carShader     = std::make_unique<Shader>("carVertex.glsl", "carFragment.glsl");
 	skinnedShader = std::make_unique<Shader>("skinnedVertex.glsl", "skinnedFragment.glsl");
 	skinnedShadowShader = std::make_unique<Shader>("skinnedShadowVertex.glsl", "shadowFragment.glsl");
 	buildingShader       = std::make_unique<Shader>("buildingVertex.glsl", "buildingFragment.glsl");
@@ -203,7 +211,7 @@ void Renderer::BuildScene() {
 	}
 
 	// Reflective paint (Material::Car). The mesh already has the car's proportions. Transform set every frame.
-	carNode = new SceneObject(carMesh.get(), Material::Car, Vector4(0.75f, 0.08f, 0.08f, 1.0f));
+	carNode = new SceneObject(carMesh.get(), Material::Car, Vector4(0.55f, 0.10f, 0.55f, 1.0f));   // purple
 	carNode->SetBoundingRadius(3.0f);
 	root->AddChild(carNode);
 
@@ -428,12 +436,12 @@ void Renderer::UpdateLights() {
 
 	int spotCount = 0;
 	if (night > 0.2f) {
-		const Vector3 pos = road->PositionAt(carDistance);
 		Vector3 forward = road->DirectionAt(carDistance);
 		forward.y = 0.0f;
 		const float len = std::sqrt(forward.x * forward.x + forward.z * forward.z);
 		forward = forward * (1.0f / len);
 		const Vector3 right(-forward.z, 0.0f, forward.x);
+		const Vector3 pos = road->PositionAt(carDistance) + right * kPlayerLane;
 		Vector3 aim(forward.x, -0.08f, forward.z);   // tilted slightly down onto the road
 		aim = aim * (1.0f / std::sqrt(aim.x * aim.x + aim.y * aim.y + aim.z * aim.z));
 
@@ -504,7 +512,7 @@ void Renderer::BuildTraffic() {
 	const int   kCount = 8;
 	const Vector4 paint[kCount] = {
 		Vector4(0.10f, 0.25f, 0.65f, 1), Vector4(0.85f, 0.85f, 0.88f, 1), Vector4(0.95f, 0.75f, 0.10f, 1), Vector4(0.08f, 0.08f, 0.09f, 1),
-		Vector4(0.10f, 0.50f, 0.25f, 1), Vector4(0.80f, 0.35f, 0.08f, 1), Vector4(0.55f, 0.55f, 0.60f, 1), Vector4(0.55f, 0.10f, 0.55f, 1)
+		Vector4(0.10f, 0.50f, 0.25f, 1), Vector4(0.80f, 0.35f, 0.08f, 1), Vector4(0.55f, 0.55f, 0.60f, 1), Vector4(0.75f, 0.08f, 0.08f, 1)
 	};
 	const float length = road->GetLength();
 
@@ -513,12 +521,18 @@ void Renderer::BuildTraffic() {
 		node->SetBoundingRadius(3.0f);
 		root->AddChild(node);
 
+		// Cars that travel WITH the player share its lane and its exact speed, so they form a convoy
+		// that can never run into each other. Oncoming cars (other lane) all share one slower speed
+		// for the same reason; the closing speed with the player is what makes them whoosh past.
+		const float convoyStart[kCount / 2] = { 90.0f, 260.0f, 700.0f, 1500.0f };
+		const bool  withPlayer = (i % 2 == 0);
+
 		TrafficCar car;
 		car.node      = node;
-		car.distance  = length * (i + 0.5f) / kCount;
-		car.speed     = 12.0f + 2.0f * (i % 4);
-		car.direction = (i % 2 == 0) ? 1.0f : -1.0f;
-		car.lane      = (i % 2 == 0) ? 2.6f : -2.6f;   // each travels on its own side of the centre line
+		car.distance  = withPlayer ? convoyStart[i / 2] : length * ((i / 2) + 0.5f) / (kCount / 2);
+		car.speed     = withPlayer ? kCarSpeed : 16.0f;
+		car.direction = withPlayer ? 1.0f : -1.0f;
+		car.lane      = withPlayer ? kPlayerLane : -kPlayerLane;
 		traffic.push_back(car);
 	}
 	UpdateTraffic(0.0f);
@@ -584,12 +598,12 @@ void Renderer::UpdateScene(float /*dt*/) {
 	}
 	if (keys->KeyTriggered(KEYBOARD_Y)) { timeAuto = !timeAuto; }
 	if (timeAuto) {
-		timeOfDay += dt * 0.25f;   // a whole day in 96 seconds
+		timeOfDay += dt / 6.0f;   // 6 real seconds per hour: a whole day in 144 seconds
 		if (timeOfDay >= 24.0f) { timeOfDay -= 24.0f; }
 	}
 
+	UpdateCar(dt);   // the world keeps running when the camera is released
 	if (cameraMode == CameraMode::Cinematic) {
-		UpdateCar(dt);   // the car only drives while the cinematic camera is following it
 		UpdateCinematicCamera();
 	}
 	else {
@@ -623,8 +637,9 @@ void Renderer::UpdateCar(float dt) {
 		carDistance -= road->GetLength();
 	}
 
-	const Vector3 pos = road->PositionAt(carDistance);
-	const Vector3 dir = road->DirectionAt(carDistance);
+	const Vector3 dir   = road->DirectionAt(carDistance);
+	const Vector3 right(-dir.z, 0.0f, dir.x);
+	const Vector3 pos   = road->PositionAt(carDistance) + right * kPlayerLane;
 	carNode->SetTransform(
 		Matrix4::Translation(pos + Vector3(0.0f, 0.6f, 0.0f)) *
 		Matrix4::Rotation(YawFromDirection(dir), Vector3(0, 1, 0)) *
@@ -632,8 +647,11 @@ void Renderer::UpdateCar(float dt) {
 }
 
 void Renderer::UpdateCinematicCamera() {
-	eyePosition = road->PositionAt(carDistance - kCamBehind) + Vector3(0.0f, kCamHeight, 0.0f);
-	lookTarget  = road->PositionAt(carDistance + kLookAhead) + Vector3(0.0f, kLookHeight, 0.0f);
+	// Stay in the car's lane (a little to the right of the centre line).
+	const Vector3 d = road->DirectionAt(carDistance);
+	const Vector3 lane = Vector3(-d.z, 0.0f, d.x) * kPlayerLane;
+	eyePosition = road->PositionAt(carDistance - kCamBehind) + lane + Vector3(0.0f, kCamHeight, 0.0f);
+	lookTarget  = road->PositionAt(carDistance + kLookAhead) + lane + Vector3(0.0f, kLookHeight, 0.0f);
 	viewMatrix  = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
 }
 

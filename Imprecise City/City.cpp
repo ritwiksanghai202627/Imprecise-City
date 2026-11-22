@@ -82,7 +82,7 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 
 	// --- Blocks: a grid of 46 m cells, aligned with the road. Cells on the road itself stay empty.
 	const float pitch = 46.0f;
-	const int   half  = 3;
+	const int   half  = 4;
 	for (int ia = -half; ia <= half; ++ia) {
 		for (int ib = -half; ib <= half; ++ib) {
 			const float a = ia * pitch, b = ib * pitch;
