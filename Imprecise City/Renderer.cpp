@@ -18,6 +18,11 @@ namespace {
 	const float kLookAhead     = 12.0f;
 	const float kLookHeight    = 1.5f;
 
+	// Shadow map tuning
+	const int   kShadowMapSize      = 2048;
+	const float kShadowLightDistance = 800.0f;   // how far from the focus point the sun camera sits
+	const float kShadowDepthBias    = 0.0001f;   // in 0..1 depth units (range is 2 x light distance)
+
 	// nclgl convention: yaw 0 looks down -Z, positive pitch looks up.
 	float YawFromDirection(const Vector3& f) {
 		return std::atan2(-f.x, -f.z) * kRadToDeg;
@@ -48,19 +53,21 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	roadShader    = std::make_unique<Shader>("sceneVertex.glsl", "roadFragment.glsl");
 	seaShader     = std::make_unique<Shader>("sceneVertex.glsl", "seaFragment.glsl");
 	litShader     = std::make_unique<Shader>("sceneVertex.glsl", "litFragment.glsl");
+	shadowShader  = std::make_unique<Shader>("shadowVertex.glsl", "shadowFragment.glsl");
 
 	grassTexture = LoadTexture("grass.png");
 	sandTexture  = LoadTexture("sand.png");
 	rockTexture  = LoadTexture("rock.png");
 
 	if (!carMesh || !terrainShader->LoadSuccess() || !roadShader->LoadSuccess() ||
-	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() ||
+	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() || !shadowShader->LoadSuccess() ||
 	    !grassTexture || !sandTexture || !rockTexture) {
 		std::cout << "Renderer: resource loading failed, see messages above.\n";
 		return;   // init stays false, so main() exits cleanly
 	}
 
 	BuildScene();
+	CreateShadowMap();
 
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
 	glGenBuffers(1, &frameUBO);
@@ -72,6 +79,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	Vector3 sun(0.45f, 0.70f, 0.55f);
 	const float sunLen = std::sqrt(sun.x * sun.x + sun.y * sun.y + sun.z * sun.z);
 	sun = sun * (1.0f / sunLen);
+	sunDirection = sun;
 	frameData.sunDir    = Vector4(sun.x, sun.y, sun.z, 1.0f);
 	frameData.sunColour = Vector4(1.0f, 0.95f, 0.85f, 1.0f);
 	frameData.fogColour = Vector4(0.62f, 0.75f, 0.90f, 0.00045f);
@@ -91,6 +99,8 @@ Renderer::~Renderer() {
 	glDeleteTextures(1, &sandTexture);
 	glDeleteTextures(1, &rockTexture);
 	glDeleteBuffers(1, &frameUBO);
+	glDeleteTextures(1, &shadowTex);
+	glDeleteFramebuffers(1, &shadowFBO);
 }
 
 // The scene graph:
@@ -117,6 +127,7 @@ void Renderer::BuildScene() {
 	// The road is one mesh for now; a bounding sphere around the origin covers all of it.
 	SceneObject* roadNode = new SceneObject(roadMesh.get(), Material::Road);
 	roadNode->SetBoundingRadius(800.0f);
+	roadNode->SetCastsShadow(false);   // a thin ribbon on the ground: it receives shadows but need not cast them
 	root->AddChild(roadNode);
 
 	// Assumes Cube.msh spans -1..1, so this is a 2 x 1.2 x 4.4 box. Transform set every frame.
@@ -152,20 +163,18 @@ void Renderer::Use(Shader& shader) {
 
 void Renderer::UpdateScene(float /*dt*/) {
 	const auto now = std::chrono::steady_clock::now();
-	const float dt = std::min(std::chrono::duration<float>(now - lastTick).count(), 0.1f);
+	const float rawDt = std::chrono::duration<float>(now - lastTick).count();   // real frame time, for the stats
+	const float dt    = std::min(rawDt, 0.1f);                                  // the simulation never jumps by more than 0.1 s
 	lastTick = now;
 	elapsedSeconds += dt;
 
-	if (Window::GetKeyboard()->KeyTriggered(KEYBOARD_C)) {
-		SwitchCameraMode();
-	}
-	if (Window::GetKeyboard()->KeyTriggered(KEYBOARD_F)) {
-		cullingFrozen = !cullingFrozen;
-	}
-
-	UpdateCar(dt);
+	auto* keys = Window::GetKeyboard();
+	if (keys->KeyTriggered(KEYBOARD_C)) { SwitchCameraMode(); }
+	if (keys->KeyTriggered(KEYBOARD_F)) { cullingFrozen = !cullingFrozen; }
+	if (keys->KeyTriggered(KEYBOARD_H)) { shadowsEnabled = !shadowsEnabled; }
 
 	if (cameraMode == CameraMode::Cinematic) {
+		UpdateCar(dt);   // the car only drives while the cinematic camera is following it
 		UpdateCinematicCamera();
 	}
 	else {
@@ -180,7 +189,8 @@ void Renderer::UpdateScene(float /*dt*/) {
 		cullFrustum.FromMatrix(projMatrix * viewMatrix);
 	}
 
-	UpdateWindowTitle(dt);
+	UpdateShadowMatrix();
+	UpdateWindowTitle(rawDt);
 }
 
 void Renderer::UpdateCar(float dt) {
@@ -231,21 +241,36 @@ void Renderer::SwitchCameraMode() {
 	}
 	else {
 		cameraMode = CameraMode::Cinematic;
+		cullingFrozen = false;   // a frozen frustum only makes sense while flying around
 	}
 }
 
-void Renderer::UpdateWindowTitle(float dt) {
-	titleTimer += dt;
+void Renderer::UpdateWindowTitle(float frameTime) {
+	// Lifetime min/max/average skip the first seconds, which are dominated by start-up hitches.
+	if (elapsedSeconds > 3.0f) {
+		++fpsFrames;
+		fpsTotalTime += frameTime;
+		worstFrame = std::max(worstFrame, frameTime);
+		bestFrame  = std::min(bestFrame, frameTime);
+	}
+
+	titleTimer += frameTime;
 	++titleFrames;
 	if (titleTimer < 0.5f) {
-		return;
+		return;   // refresh the title twice a second, not every frame
 	}
-	char title[256];
+
+	const double average = fpsFrames ? fpsFrames / fpsTotalTime : 0.0;
+	const double low     = worstFrame > 0.0f ? 1.0 / worstFrame : 0.0;
+	const double high    = bestFrame < 1e8f ? 1.0 / bestFrame : 0.0;
+
+	char title[320];
 	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (%.1f ms) | nodes %u/%u | draws %u | tris %u | cull %s | cam %s",
-		titleFrames / titleTimer, 1000.0f * titleTimer / titleFrames,
-		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.triangles,
-		cullingFrozen ? "FROZEN" : "live",
+		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | frustum %s | shadows %s | cam %s",
+		titleFrames / titleTimer, average, low, high,
+		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
+		cullingFrozen ? "FROZEN" : "camera",
+		shadowsEnabled ? "on" : "off",
 		cameraMode == CameraMode::Cinematic ? "cinematic" : "free");
 	if (HWND window = GetActiveWindow()) {
 		SetWindowTextA(window, title);
@@ -255,35 +280,125 @@ void Renderer::UpdateWindowTitle(float dt) {
 }
 
 void Renderer::UploadFrameData() {
-	frameData.viewMatrix = viewMatrix;
-	frameData.projMatrix = projMatrix;
-	frameData.cameraPos  = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
-	frameData.timeInfo   = Vector4(elapsedSeconds, 0.0f, 0.0f, 0.0f);
+	frameData.viewMatrix      = viewMatrix;
+	frameData.projMatrix      = projMatrix;
+	frameData.shadowViewProj  = shadowProj * shadowView;
+	frameData.cameraPos       = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
+	frameData.timeInfo        = Vector4(elapsedSeconds, 0.0f, 0.0f, 0.0f);
+	// x = size of one shadow-map texel in UV units, y = depth bias, z = normal offset in world units, w = on/off
+	frameData.shadowParams    = Vector4(1.0f / kShadowMapSize, kShadowDepthBias, 1.5f * shadowTexelWorld, shadowsEnabled ? 1.0f : 0.0f);
 
 	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameData), &frameData);
 }
 
-// Walks the graph once. A node is kept only if its bounding sphere touches the frustum;
-// the kept nodes go into one of two lists, because opaque and transparent objects need
-// opposite sort orders.
-void Renderer::BuildNodeLists(SceneNode* node) {
+// Walks the graph once and keeps every mesh node whose bounding sphere touches 'frustum'.
+// Main pass: survivors go into the opaque or transparent list (opposite sort orders).
+// Shadow pass: survivors that cast shadows go into the caster list, tested against the
+// light's frustum, so off-screen-for-the-sun terrain is not rendered into the shadow map.
+void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 	if (node->GetMesh()) {
-		++stats.nodesTotal;
-		if (cullFrustum.InsideFrustum(*node)) {
-			++stats.nodesDrawn;
+		SceneObject* object = static_cast<SceneObject*>(node);   // valid: see SceneObject.h
 
-			// Squared distance is enough for ordering and skips the square root.
-			const Vector3 d = node->GetWorldTransform().GetPositionVector() - eyePosition;
-			node->SetCameraDistance(d.x * d.x + d.y * d.y + d.z * d.z);
+		if (shadowPass) {
+			if (object->CastsShadow() && !object->IsTransparent() && frustum.InsideFrustum(*node)) {
+				shadowCasterList.push_back(object);
+			}
+		}
+		else {
+			++stats.nodesTotal;
+			if (frustum.InsideFrustum(*node)) {
+				++stats.nodesDrawn;
 
-			SceneObject* object = static_cast<SceneObject*>(node);   // valid: see SceneObject.h
-			(object->IsTransparent() ? transparentList : opaqueList).push_back(object);
+				// Squared distance is enough for ordering and skips the square root.
+				const Vector3 d = node->GetWorldTransform().GetPositionVector() - eyePosition;
+				node->SetCameraDistance(d.x * d.x + d.y * d.y + d.z * d.z);
+
+				(object->IsTransparent() ? transparentList : opaqueList).push_back(object);
+			}
 		}
 	}
 	for (auto i = node->GetChildIteratorStart(); i != node->GetChildIteratorEnd(); ++i) {
-		BuildNodeLists(*i);
+		CullNodes(*i, frustum, shadowPass);
 	}
+}
+
+// Fits an orthographic "sun camera" around the area in front of the viewer.
+void Renderer::UpdateShadowMatrix() {
+	// The camera's forward vector is minus the third row of the view matrix's rotation.
+	const Vector3 forward(-viewMatrix.values[2], -viewMatrix.values[6], -viewMatrix.values[10]);
+
+	// Bigger box when the camera is high (overview shots); stepped, so it does not change every frame.
+	const float halfSize = std::min(700.0f, 150.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
+	const Vector3 focus    = eyePosition + forward * (halfSize * 0.6f);
+	const Vector3 lightEye = focus + sunDirection * kShadowLightDistance;
+	const Vector3 up       = std::fabs(sunDirection.y) > 0.99f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
+
+	shadowView       = Matrix4::BuildViewMatrix(lightEye, focus, up);
+	shadowTexelWorld = 2.0f * halfSize / kShadowMapSize;
+
+	// Texel snapping: round the light-space origin to a whole number of shadow texels. Without
+	// this the shadow map slides by sub-texel amounts as the camera moves, and shadow edges shimmer.
+	shadowView.values[12] = std::floor(shadowView.values[12] / shadowTexelWorld + 0.5f) * shadowTexelWorld;
+	shadowView.values[13] = std::floor(shadowView.values[13] / shadowTexelWorld + 0.5f) * shadowTexelWorld;
+
+	shadowProj = Matrix4::Orthographic(1.0f, kShadowLightDistance * 2.0f, halfSize, -halfSize, halfSize, -halfSize);
+	shadowFrustum.FromMatrix(shadowProj * shadowView);
+}
+
+// A depth-only texture the sun renders into. Hardware depth comparison (REF_TO_TEXTURE) lets
+// the fragment shader ask "is this point in shadow?" and get a filtered answer back.
+void Renderer::CreateShadowMap() {
+	glGenTextures(1, &shadowTex);
+	glBindTexture(GL_TEXTURE_2D, shadowTex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowMapSize, kShadowMapSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	const float border[4] = { 1.0f, 1.0f, 1.0f, 1.0f };   // outside the map counts as "nothing in the way"
+	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+	glGenFramebuffers(1, &shadowFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowTex, 0);
+	glDrawBuffer(GL_NONE);   // depth only: no colour attachment
+	glReadBuffer(GL_NONE);
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+		std::cout << "Renderer: shadow map framebuffer is not complete!\n";
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void Renderer::RenderShadowPass() {
+	StartDebugGroup("Shadow pass");
+
+	shadowCasterList.clear();
+	CullNodes(root.get(), shadowFrustum, true);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+	glViewport(0, 0, kShadowMapSize, kShadowMapSize);
+	glClear(GL_DEPTH_BUFFER_BIT);
+
+	// Slope-scaled depth bias, so surfaces nearly parallel to the sun do not shadow themselves.
+	glEnable(GL_POLYGON_OFFSET_FILL);
+	glPolygonOffset(2.0f, 2.0f);
+
+	Use(*shadowShader);
+	const GLint shadowModelLoc = glGetUniformLocation(activeProgram, "modelMatrix");
+	for (SceneObject* node : shadowCasterList) {
+		const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
+		glUniformMatrix4fv(shadowModelLoc, 1, false, model.values);
+		node->Draw(*this);
+		++stats.shadowDraws;
+	}
+
+	glDisable(GL_POLYGON_OFFSET_FILL);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, width, height);
+	EndDebugGroup();
 }
 
 void Renderer::SortNodeLists() {
@@ -364,14 +479,23 @@ void Renderer::DrawNodes(const std::vector<SceneObject*>& list) {
 }
 
 void Renderer::RenderScene() {
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	stats = FrameStats();
 	UploadFrameData();
 
-	stats = FrameStats();
+	if (shadowsEnabled) {
+		RenderShadowPass();
+	}
+
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+	// The shadow map lives on texture unit 4 for the whole main pass (see lighting.glslh).
+	glActiveTexture(GL_TEXTURE4);
+	glBindTexture(GL_TEXTURE_2D, shadowTex);
+	glActiveTexture(GL_TEXTURE0);
 	materialBound = false;
 
 	StartDebugGroup("Scene culling and sorting");
-	BuildNodeLists(root.get());
+	CullNodes(root.get(), cullFrustum, false);
 	SortNodeLists();
 	EndDebugGroup();
 

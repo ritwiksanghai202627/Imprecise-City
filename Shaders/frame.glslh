@@ -4,9 +4,11 @@
 layout(std140, binding = 0) uniform FrameData {
 	mat4 viewMatrix;
 	mat4 projMatrix;
-	vec4 cameraPos;   // xyz = world position
-	vec4 sunDir;      // xyz = unit vector pointing TOWARDS the sun, w = intensity
-	vec4 sunColour;   // rgb
-	vec4 fogColour;   // rgb, w = fog density
-	vec4 timeInfo;    // x = seconds since start
+	mat4 shadowViewProj;   // world space -> sun clip space
+	vec4 cameraPos;        // xyz = world position
+	vec4 sunDir;           // xyz = unit vector pointing TOWARDS the sun, w = intensity
+	vec4 sunColour;        // rgb
+	vec4 fogColour;        // rgb, w = fog density
+	vec4 timeInfo;         // x = seconds since start
+	vec4 shadowParams;     // x = 1 / shadow map size, y = depth bias, z = normal offset (world units), w = shadows on
 };

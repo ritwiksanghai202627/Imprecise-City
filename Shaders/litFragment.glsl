@@ -15,7 +15,7 @@ out vec4 fragColour;
 
 void main(void) {
 	vec3  N      = normalize(IN.normal);
-	vec3  colour = ApplyDirectional(baseColour.rgb, N);
+	vec3  colour = ApplyDirectional(baseColour.rgb, N, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), baseColour.a);

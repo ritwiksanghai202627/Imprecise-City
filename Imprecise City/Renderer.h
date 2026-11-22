@@ -18,15 +18,17 @@ class RoadPath;
 struct FrameData {
 	Matrix4 viewMatrix;
 	Matrix4 projMatrix;
+	Matrix4 shadowViewProj;
 	Vector4 cameraPos;
 	Vector4 sunDir;
 	Vector4 sunColour;
 	Vector4 fogColour;
 	Vector4 timeInfo;
+	Vector4 shadowParams;
 };
 static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
-static_assert(sizeof(FrameData) == 2 * 64 + 5 * 16, "FrameData must match the std140 block in frame.glslh");
+static_assert(sizeof(FrameData) == 3 * 64 + 6 * 16, "FrameData must match the std140 block in frame.glslh");
 
 // Per-frame counters, shown in the window title.
 struct FrameStats {
@@ -34,6 +36,7 @@ struct FrameStats {
 	unsigned nodesDrawn = 0;   // ...that survived culling
 	unsigned drawCalls  = 0;
 	unsigned triangles  = 0;
+	unsigned shadowDraws = 0;   // draw calls in the shadow pass
 };
 
 class Renderer : public OGLRenderer {
@@ -49,7 +52,10 @@ private:
 
 	// Scene graph
 	void BuildScene();
-	void BuildNodeLists(SceneNode* node);   // frustum test + split into opaque / transparent
+	void CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass);   // frustum test, then fill the opaque / transparent / shadow-caster lists
+	void CreateShadowMap();
+	void UpdateShadowMatrix();
+	void RenderShadowPass();
 	void SortNodeLists();
 	void ClearNodeLists();
 	void DrawNodes(const std::vector<SceneObject*>& list);
@@ -91,6 +97,17 @@ private:
 	Frustum cullFrustum;
 	bool    cullingFrozen = false;
 
+	// Sun shadow: one orthographic depth map that follows the camera
+	Frustum                   shadowFrustum;
+	std::vector<SceneObject*> shadowCasterList;
+	std::unique_ptr<Shader>   shadowShader;
+	GLuint  shadowFBO = 0;
+	GLuint  shadowTex = 0;
+	Matrix4 shadowView, shadowProj;
+	float   shadowTexelWorld = 0.0f;   // world size of one shadow texel
+	bool    shadowsEnabled = true;     // H toggles
+	Vector3 sunDirection;              // unit vector towards the sun
+
 	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
@@ -112,4 +129,8 @@ private:
 	FrameStats stats;
 	float      titleTimer  = 0.0f;
 	int        titleFrames = 0;
+	unsigned long fpsFrames = 0;       // lifetime fps stats (after warm-up)
+	double     fpsTotalTime = 0.0;
+	float      worstFrame = 0.0f;
+	float      bestFrame  = 1e9f;
 };

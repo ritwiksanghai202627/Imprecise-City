@@ -32,7 +32,7 @@ void main(void) {
 	vec3 albedo = lerp(grass, sand, sandAmount);
 	albedo      = lerp(albedo, rock, rockAmount);
 
-	vec3  colour = ApplyDirectional(albedo, N);
+	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);

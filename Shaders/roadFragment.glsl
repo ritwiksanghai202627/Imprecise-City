@@ -24,7 +24,7 @@ void main(void) {
 	albedo = lerp(albedo, vec3(0.80, 0.65, 0.15), centreLine);
 
 	vec3  N      = normalize(IN.normal);
-	vec3  colour = ApplyDirectional(albedo, N);
+	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);
