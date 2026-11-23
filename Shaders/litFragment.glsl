@@ -2,6 +2,7 @@
 #include "frame.glslh"
 #include "support.glslh"
 #include "lighting.glslh"
+#include "sky.glslh"
 
 uniform vec4 baseColour;
 
@@ -15,8 +16,9 @@ out vec4 fragColour;
 
 void main(void) {
 	vec3  N      = normalize(IN.normal);
-	vec3  colour = ApplyLighting(baseColour.rgb, N, IN.worldPos, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
+	vec3  colour = ApplyLighting(baseColour.rgb, N, IN.worldPos,
+	                             ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist));
 
 	fragColour = vec4(ApplyFog(colour, dist), baseColour.a);
 }

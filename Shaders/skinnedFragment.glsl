@@ -2,6 +2,7 @@
 #include "frame.glslh"
 #include "support.glslh"
 #include "lighting.glslh"
+#include "sky.glslh"
 
 layout(binding = 0) uniform sampler2D diffuseTex;   // the renderer binds a 1x1 white texture when a model has none
 uniform vec4 baseColour;                            // glTF baseColorFactor of the current sub-mesh
@@ -18,8 +19,9 @@ void main(void) {
 	vec3 N      = normalize(IN.normal);
 	vec3 albedo = texture(diffuseTex, IN.texCoord).rgb * baseColour.rgb;
 
-	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, ShadowFactor(IN.worldPos, N));
 	float dist   = length(IN.worldPos - cameraPos.xyz);
+	vec3  colour = ApplyLighting(albedo, N, IN.worldPos,
+	                             ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist));
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);
 }

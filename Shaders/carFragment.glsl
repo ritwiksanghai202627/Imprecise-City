@@ -2,6 +2,7 @@
 #include "frame.glslh"
 #include "support.glslh"
 #include "lighting.glslh"
+#include "sky.glslh"
 
 layout(binding = 5) uniform samplerCube envMap;   // sky baked by the renderer
 uniform vec4 baseColour;
@@ -22,7 +23,8 @@ void main(void) {
 	vec3 N = normalize(IN.normal);
 	vec3 V = normalize(cameraPos.xyz - IN.worldPos);
 
-	float shadow = ShadowFactor(IN.worldPos, N);
+	float dist   = length(IN.worldPos - cameraPos.xyz);
+	float shadow = ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist);
 	vec3  paint  = ApplyLighting(baseColour.rgb, N, IN.worldPos, shadow);
 
 	vec3  R       = reflect(-V, N);
@@ -46,6 +48,5 @@ void main(void) {
 	colour += vec3(1.0, 0.04, 0.02) * rear  * lamp * (0.8 + 3.0 * night);
 	colour += vec3(1.0, 0.92, 0.75) * front * lamp * (0.3 + 3.0 * night);
 
-	float dist = length(IN.worldPos - cameraPos.xyz);
 	fragColour = vec4(ApplyFog(colour, dist), baseColour.a);
 }
