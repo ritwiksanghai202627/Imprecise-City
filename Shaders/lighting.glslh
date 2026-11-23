@@ -56,11 +56,10 @@ vec3 ApplyDirectional(vec3 albedo, vec3 N, float shadow) {
 
 // Local lights: street lamps (point) and car headlights (spot). Counts come from the frame UBO,
 // so by day (no lights on) the loops do nothing. Cheap falloff: linear fade squared, zero at the radius.
-// Beyond 250 m from the camera the lights are skipped: fog hides their effect and overview shots
-// (the most pixel-heavy ones) stay cheap.
-// Beyond this distance the lights are skipped: fog hides their effect and overview shots
-// (the most pixel-heavy ones) stay cheap.
-const float LIGHT_CULL_DISTANCE = 250.0;
+// Beyond 70 m from the camera the lights are skipped. A lamp's own radius is only ~45 m, so a surface
+// further out than that receives nothing anyway; culling here removes the loop from most night pixels
+// (distant lamps are simply not rendered, which is the accepted trade for frame rate).
+const float LIGHT_CULL_DISTANCE = 70.0;
 
 vec3 ApplyPointLights(vec3 albedo, vec3 N, vec3 worldPos) {
 	vec3 sum = vec3(0.0);
@@ -111,8 +110,10 @@ vec3 ApplyLighting(vec3 albedo, vec3 N, vec3 worldPos, float shadow) {
 }
 
 // Exponential-squared fog: clear nearby, fades smoothly into the sky colour.
-vec3 ApplyFog(vec3 colour, float dist) {
-	float x = dist * fogColour.w;
+// The scale lets a surface use thinner haze (water uses ~0.5) without duplicating this maths.
+vec3 ApplyFog(vec3 colour, float dist, float densityScale) {
+	float x = dist * fogColour.w * densityScale;
 	float f = 1.0 - exp(-x * x);
 	return lerp(colour, fogColour.rgb, saturate(f));
 }
+vec3 ApplyFog(vec3 colour, float dist) { return ApplyFog(colour, dist, 1.0); }

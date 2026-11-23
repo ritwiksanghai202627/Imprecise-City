@@ -65,10 +65,10 @@ void main(void) {
 	}
 
 	vec3  N      = normalize(IN.normal);
-	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos))
+	float dist   = length(IN.worldPos - cameraPos.xyz);
+	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist))
 	             + albedo * lampLight
 	             + ApplySpotLights(albedo, N, IN.worldPos);   // the car's headlights
-	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);
 }

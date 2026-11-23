@@ -1,14 +1,15 @@
 // Water shading shared by the sea now, and by the puddle / boat later.
 // Needs support.glslh included first.
 
-// 1 while the wave is well resolved, 0 once one pixel covers a third of a wavelength.
-// The upper end is where a sine starts to alias; fading before it is what keeps the surface
-// from turning into contour rings at grazing angles.
+// 1 while the wave is well resolved, 0 once one pixel covers about half a wavelength.
+// Nyquist says a sine is unresolved at half a wavelength, so fading a little before that is
+// enough. The previous 0.10-0.33 window was far too conservative: at eye level it flattened the
+// sea only ~100 m out, which read as the ripples "dying" in the middle distance.
 float WaveFade(float wavelength, float footprint) {
-	return 1.0 - smoothstep(wavelength * 0.10, wavelength * 0.33, footprint);
+	return 1.0 - smoothstep(wavelength * 0.22, wavelength * 0.55, footprint);
 }
 
-// Analytic normal for six directional wave trains. Summing slopes (the gradient) instead of
+// Analytic normal for nine directional wave trains. Summing slopes (the gradient) instead of
 // sampling a height field means no textures and no finite differences.
 //
 // footprint = world-space size of one pixel on the water (max of fwidth(worldPos.xz)). Fading by
@@ -16,10 +17,10 @@ float WaveFade(float wavelength, float footprint) {
 // along the surface, one pixel covers many metres of water long before it is far away, and that
 // is exactly where the banding used to appear.
 //
-// Six trains spread around the compass rather than three near-parallel ones: a small number of
-// trains sums into a regular lattice whose beat lines read as concentric ripples. The wavelengths
-// are also deliberately incommensurate (no 2:1 ratios) and the warp bends the crests, so there is
-// no repeating structure left to see.
+// The trains are spread around the compass and deliberately incommensurate (no 2:1 ratios), and
+// the warp bends the crests, so there is no repeating lattice left to read as concentric ripples.
+// The three long swells are what keep the surface from turning into a mirror in the mid distance:
+// short ripples are always the first to go, so without them the sea looks polished just offshore.
 vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	vec2 d0 = normalize(vec2( 0.97,  0.26));
 	vec2 d1 = normalize(vec2( 0.21,  0.98));
@@ -27,6 +28,9 @@ vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	vec2 d3 = normalize(vec2(-0.94, -0.34));
 	vec2 d4 = normalize(vec2(-0.34, -0.94));
 	vec2 d5 = normalize(vec2( 0.68, -0.73));
+	vec2 d6 = normalize(vec2( 0.42,  0.91));
+	vec2 d7 = normalize(vec2(-0.88,  0.47));
+	vec2 d8 = normalize(vec2( 0.76, -0.65));
 
 	const float k0 = 6.2831853 / 23.0;
 	const float k1 = 6.2831853 / 11.3;
@@ -34,25 +38,73 @@ vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	const float k3 = 6.2831853 /  3.7;
 	const float k4 = 6.2831853 /  2.3;
 	const float k5 = 6.2831853 /  1.4;
+	const float k6 = 6.2831853 / 137.0;
+	const float k7 = 6.2831853 /  61.0;
+	const float k8 = 6.2831853 /  37.0;
 
 	float warp = ValueNoise(xz * 0.03) * 4.0;
 
+	// Each train is skipped when its fade has reached zero. Distant pixels take every branch the
+	// same way, so this is a real saving on the large sea areas rather than divergent shuffling.
 	vec2 slope = vec2(0.0);
-	slope += d0 * 0.095 * WaveFade(23.0, footprint) * cos(dot(d0, xz) * k0 - time * 2.0 + warp);
-	slope += d1 * 0.070 * WaveFade(11.3, footprint) * cos(dot(d1, xz) * k1 - time * 2.6 + warp * 1.6);
-	slope += d2 * 0.050 * WaveFade( 6.1, footprint) * cos(dot(d2, xz) * k2 - time * 3.3 + warp * 2.1);
-	slope += d3 * 0.035 * WaveFade( 3.7, footprint) * cos(dot(d3, xz) * k3 - time * 4.1 + warp * 2.7);
-	slope += d4 * 0.024 * WaveFade( 2.3, footprint) * cos(dot(d4, xz) * k4 - time * 5.2 + warp * 3.3);
-	slope += d5 * 0.016 * WaveFade( 1.4, footprint) * cos(dot(d5, xz) * k5 - time * 6.4 + warp * 3.9);
+	float f0 = WaveFade( 23.0, footprint);
+	if (f0 > 0.001) slope += d0 * (0.095 * f0) * cos(dot(d0, xz) * k0 - time * 2.0 + warp);
+	float f1 = WaveFade( 11.3, footprint);
+	if (f1 > 0.001) slope += d1 * (0.070 * f1) * cos(dot(d1, xz) * k1 - time * 2.6 + warp * 1.6);
+	float f2 = WaveFade(  6.1, footprint);
+	if (f2 > 0.001) slope += d2 * (0.050 * f2) * cos(dot(d2, xz) * k2 - time * 3.3 + warp * 2.1);
+	float f3 = WaveFade(  3.7, footprint);
+	if (f3 > 0.001) slope += d3 * (0.035 * f3) * cos(dot(d3, xz) * k3 - time * 4.1 + warp * 2.7);
+	float f4 = WaveFade(  2.3, footprint);
+	if (f4 > 0.001) slope += d4 * (0.024 * f4) * cos(dot(d4, xz) * k4 - time * 5.2 + warp * 3.3);
+	float f5 = WaveFade(  1.4, footprint);
+	if (f5 > 0.001) slope += d5 * (0.016 * f5) * cos(dot(d5, xz) * k5 - time * 6.4 + warp * 3.9);
+
+	// Long swells: survive to a much larger footprint, so the mid/far sea keeps some shape.
+	float f6 = WaveFade(137.0, footprint);
+	if (f6 > 0.001) slope += d6 * (0.020 * f6) * cos(dot(d6, xz) * k6 - time * 1.05 + warp * 0.6);
+	float f7 = WaveFade( 61.0, footprint);
+	if (f7 > 0.001) slope += d7 * (0.026 * f7) * cos(dot(d7, xz) * k7 - time * 1.35 + warp * 0.8);
+	float f8 = WaveFade( 37.0, footprint);
+	if (f8 > 0.001) slope += d8 * (0.018 * f8) * cos(dot(d8, xz) * k8 - time * 1.70 + warp * 1.0);
 
 	return normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
 // Sparse twinkles that ride on the wave slopes; multiplied into the tight sun highlight.
 // 'footprint' fades them out where a pixel is wider than a sparkle, so they stay sparkles
-// instead of becoming noise.
+// instead of becoming noise. The early-out avoids two noise evaluations on distant water.
 float WaterGlitter(vec2 xz, float time, float footprint) {
+	if (footprint > 1.6) {
+		return 0.0;
+	}
 	vec2 p = xz * 2.3 + vec2(time * 1.7, -time * 1.1);
 	float n = ValueNoise(p) * ValueNoise(p * 2.1 + 7.3);
-	return smoothstep(0.55, 0.75, n) * (1.0 - smoothstep(0.35, 1.20, footprint));
+	return smoothstep(0.55, 0.75, n) * (1.0 - smoothstep(0.45, 1.60, footprint));
+}
+
+// Full surface colour for a point on the water, shared by the real sea quad and by the distant
+// sea the sky paints where that quad runs out. 'envMap' is bound to unit 5 for the whole main pass.
+// Needs lighting.glslh (ApplyFog) included before this file.
+vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube envMap) {
+	vec3 N = WaterNormal(worldPos.xz, timeInfo.x, footprint);
+
+	float fresnel = pow(1.0 - saturate(dot(N, V)), 5.0);
+	vec3  deep    = vec3(0.02, 0.12, 0.22);
+	vec3  R       = reflect(-V, N);
+	float mip     = 1.0 + 2.0 * saturate(dist / 1500.0);
+	vec3  sky     = textureLod(envMap, R, mip).rgb;
+	vec3  colour  = lerp(deep, sky, saturate(0.08 + 0.92 * fresnel));
+
+	// Tight analytic glint: the cube map's sun disc is blurry at 128^2, so restore the sparkle.
+	float sun = saturate(dot(R, sunDir.xyz));
+	if (sun > 0.10) {
+		float glitter = WaterGlitter(worldPos.xz, timeInfo.x, footprint);
+		float glint   = pow(sun, 120.0) * 0.25 + pow(sun, 1200.0) * 4.0 * (0.35 + 0.9 * glitter);
+		colour += sunColour.rgb * sunDir.w * glint;
+	}
+
+	// Both the quad and the sky-painted sea use the same thinner haze, so the join is seamless and
+	// the surface stays readable further out instead of turning into a flat band of pure fog.
+	return ApplyFog(colour, dist, 0.5);
 }

@@ -48,22 +48,21 @@ vec4 CloudLayer(vec3 d) {
 }
 
 // Cloud shadows on the ground. Project the world position along the sun onto a flat deck and
-// reuse the same value noise, so the shadows drift with the clouds. Two octaves are plenty: the
-// edges are soft anyway, and this runs for every ground pixel.
-// Cloud shadows on the ground. Project the world position along the sun onto a flat deck and
-// reuse the same value noise, so the shadows drift with the clouds. One octave: cloud shadows are
-// soft blobs, and this runs for every ground pixel (two octaves cost 2.4 ms here).
-float CloudShadow(vec3 worldPos) {
-	if (sunDir.y < 0.05) {
-		return 1.0;   // sun below the horizon: nothing casts
+// reuse the same value noise, so the shadows drift with the clouds. One octave is enough for soft
+// blobs, and the whole thing is skipped when shadows are off (H), at night, or far away where fog
+// has already washed the ground out. That last early-out is what pays for applying it everywhere.
+float CloudShadow(vec3 worldPos, float dist) {
+	if (shadowParams.w < 0.5 || sunDir.y < 0.05 || dist > 4200.0) {
+		return 1.0;
 	}
 
 	const float deckHeight = 620.0;
 	vec2 p = worldPos.xz + sunDir.xz * ((deckHeight - worldPos.y) / sunDir.y);
 	p = p * 0.0035 + vec2(0.006, 0.0025) * timeInfo.x;   // same drift as CloudLayer
 
-	float n = ValueNoise(p);
-	return 1.0 - 0.55 * smoothstep(0.50, 0.64, n);
+	float n    = ValueNoise(p);
+	float fade = 1.0 - smoothstep(2600.0, 4200.0, dist);
+	return 1.0 - 0.55 * fade * smoothstep(0.50, 0.64, n);
 }
 
 // Stars: a hash grid on the cube-projected direction. Only at night, fading out near the horizon,

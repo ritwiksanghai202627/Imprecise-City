@@ -15,10 +15,6 @@ flat in vec3 faceNormal;
 
 out vec4 fragColour;
 
-float Hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
 // Everything about a building's look is procedural: wall colour, window grid, which windows are
 // lit at night, neon shop fronts. No textures, no extra geometry.
 void main(void) {
@@ -56,7 +52,7 @@ void main(void) {
 			float glass = step(0.18, f.x) * step(f.x, 0.82)
 			            * step(shopFront ? 0.10 : 0.22, f.y) * step(f.y, shopFront ? 0.85 : 0.78);
 
-			float h   = Hash(id + vec2(seed * 91.0, seed * 37.0 + (abs(faceNormal.x) > 0.5 ? 5.0 : 0.0)));
+			float h   = Hash21(id + vec2(seed * 91.0, seed * 37.0 + (abs(faceNormal.x) > 0.5 ? 5.0 : 0.0)));
 			float lit = shopFront ? 1.0 : step(0.45, h);   // about 55% of windows are lit
 
 			vec3 glassColour = lerp(vec3(0.04, 0.07, 0.11), fogColour.rgb * 0.6, 0.35);   // dark glass, tinted by the sky
@@ -68,15 +64,12 @@ void main(void) {
 		}
 	}
 
-	float shadow = ShadowFactor(IN.worldPos, N);
-
-	// Cloud shadows on roofs only. Walls are where the overdraw is (about 2 ms for the whole pass)
-	// and a vertical wall is lit mostly by the sky anyway, so the compromise is hard to see.
-	if (abs(faceNormal.y) > 0.5) {
-		shadow *= CloudShadow(IN.worldPos);
-	}
-	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow) + emissive;
 	float dist   = length(IN.worldPos - cameraPos.xyz);
+
+	// Cloud shadows on every face, not just roofs: consistency is worth the extra noise evaluation,
+	// and the distance fade in CloudShadow keeps it off the far pixels where fog wins anyway.
+	float shadow = ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist);
+	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow) + emissive;
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);
 }

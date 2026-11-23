@@ -4,7 +4,10 @@
 
 // Which shader/material a drawable node uses. The renderer sorts opaque nodes by this
 // first, so each shader is bound once per frame instead of once per node.
-enum class Material { Terrain, Road, Lit, Car, Skinned, Sea, Building };
+// Order matters for early-z: big occluders (buildings) are drawn before the ground, so the
+// expensive terrain shader never runs for pixels a building has already covered. Terrain goes
+// last because it is the largest surface and the thing most often hidden.
+enum class Material { Building, Road, Lit, Car, Skinned, Terrain, Sea };
 
 /*
 A SceneNode that knows how it should be drawn. nclgl's SceneNode only holds a mesh, a
