@@ -2,7 +2,7 @@
 #include "Renderer.h"
 
 int main() {
-	Window w("Grand Theft const auto& : Imprecise City", 1280, 720, false);
+	Window w("Grand Theft const auto& : Imprecise City", 1920, 1080, true);
 
 	if (!w.HasInitialised()) {
 		return -1;
