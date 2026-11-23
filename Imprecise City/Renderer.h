@@ -119,6 +119,8 @@ private:
 	void   UpdateCar(float dt);
 	void   UploadFrameData();
 	void   ApplyTimeOfDay();      // sun, moon, sky and fog colours for 'timeOfDay'
+	void   UpdateSeason(float dt);   // moves the weather state towards the current season's targets
+	void   ApplyVSync();          // swap interval from 'vsyncMode'
 	void   UpdateLights();        // street lamps near the camera + car headlights -> frame UBO
 	void   BuildCity(const Vector3& centre, float roadDistance);
 	void   BuildOutskirts();      // trees + village (Outskirts.h)
@@ -199,6 +201,14 @@ private:
 	float timeOfDay      = 8.5f;    // starts on a bright morning
 	bool  timeAuto       = true;    // the clock runs by default (Y stops it)
 	int   timePreset     = 0;
+	// Seasons: rain (the opening), summer, autumn, winter, spring. P = next season, N = run / stop the automatic cycle.
+	// The scene reads the smoothed weather values below: wetness, snow cover and autumn colour go to the shaders in
+	// frameData.timeInfo (y, z, w); rain / snowfall drive the precipitation in the composite pass; overcast greys the sky.
+	int   season         = 0;       // starts in the rain
+	bool  seasonAuto     = true;
+	float seasonTimer    = 0.0f;    // seconds spent in the current season
+	float wetness = 0.0f, snowCover = 0.0f, autumnAmount = 0.0f, rainFall = 0.0f, snowFall = 0.0f, overcast = 0.0f;
+	int   vsyncMode      = 2;       // X cycles: 0 off, 1 on, 2 adaptive (tears instead of dropping to 30 fps when a frame is late)
 	float lastBakedHour  = -100.0f;   // the sky was last baked into the cube map at this hour
 	std::vector<std::pair<float, int>> lampScratch;   // reused every frame: (distance^2, lamp index)
 

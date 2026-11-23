@@ -72,6 +72,10 @@ void main(void) {
 		}
 	}
 
+	// Snow on roofs and any upward-facing surface; wet surfaces are a little darker (timeInfo: y = wetness, z = snow cover).
+	albedo = lerp(albedo, vec3(0.90, 0.93, 0.98), timeInfo.z * smoothstep(0.5, 0.9, N.y));
+	albedo *= 1.0 - 0.2 * timeInfo.y;
+
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
 	// Cloud shadows on every face, not just roofs: consistency is worth the extra noise evaluation,

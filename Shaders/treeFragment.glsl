@@ -32,6 +32,18 @@ void main(void) {
 		albedo = lerp(darker, lighter, seed) * (0.7 + 0.6 * IN.local.y);   // sunlit tops, darker insides
 	}
 
+	// Seasons (timeInfo: y = wetness, z = snow cover, w = autumn colour): broadleaf trees turn rust and drop their
+	// leaves in winter (darker, thinner colour), every tree gets snow on its upper surfaces and is darker when wet.
+	if (!trunk) {
+		if (broad) {
+			vec3 rust = lerp(vec3(0.62, 0.30, 0.05), vec3(0.62, 0.12, 0.06), seed) * (0.7 + 0.6 * IN.local.y);
+			albedo = lerp(albedo, rust, timeInfo.w);
+			albedo = lerp(albedo, vec3(0.20, 0.15, 0.11), timeInfo.z * 0.8);
+		}
+		albedo = lerp(albedo, vec3(0.90, 0.93, 0.98), timeInfo.z * saturate(N.y * 1.6 - 0.2));
+	}
+	albedo *= 1.0 - 0.25 * timeInfo.y;
+
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 	float shadow = ShadowFactor(IN.worldPos, N);
 	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow);

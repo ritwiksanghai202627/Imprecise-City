@@ -97,7 +97,10 @@ float WaterGlitter(vec2 xz, float time, float footprint) {
 // sea the sky paints where that quad runs out. 'envMap' is bound to unit 5 for the whole main pass.
 // Needs lighting.glslh (ApplyFog) included before this file.
 vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube envMap) {
-	vec3 N = WaterNormal(worldPos.xz, timeInfo.x, footprint);
+	// Winter (timeInfo.z = snow cover): the sea freezes over. Waves flatten, then the surface becomes ice.
+	float ice = saturate(timeInfo.z);
+	vec3  N   = (ice > 0.95) ? vec3(0.0, 1.0, 0.0) : WaterNormal(worldPos.xz, timeInfo.x, footprint);
+	N = normalize(lerp(N, vec3(0.0, 1.0, 0.0), ice * 0.9));
 
 	float fresnel = pow(1.0 - saturate(dot(N, V)), 5.0);
 	vec3  deep    = vec3(0.02, 0.12, 0.22);
@@ -106,12 +109,22 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 	vec3  sky     = textureLod(envMap, R, mip).rgb;
 	vec3  colour  = lerp(deep, sky, saturate(0.08 + 0.92 * fresnel));
 
+	if (ice > 0.01) {
+		// Ice: pale blue-white with slow patches and a few crack lines, lit by the sky and (a little) the sun.
+		float patchN = ValueNoise(worldPos.xz * 0.04);
+		float crackN = abs(ValueNoise(worldPos.xz * 0.22 + 9.0) - 0.5);
+		vec3  iceCol = lerp(vec3(0.52, 0.68, 0.80), vec3(0.86, 0.92, 0.97), smoothstep(0.30, 0.75, patchN));
+		iceCol      *= 0.80 + 0.35 * smoothstep(0.0, 0.03, crackN);   // darker thin cracks
+		vec3  lit    = fogColour.rgb * 0.55 + sunColour.rgb * sunDir.w * saturate(sunDir.y) * 0.60;
+		colour = lerp(colour, iceCol * lit * 1.4 + sky * fresnel * 0.25, ice * 0.92);
+	}
+
 	// Tight analytic glint: the cube map's sun disc is blurry at 128^2, so restore the sparkle.
 	float sun = saturate(dot(R, sunDir.xyz));
 	if (sun > 0.10) {
 		float glitter = WaterGlitter(worldPos.xz, timeInfo.x, footprint);
 		float glint   = pow(sun, 120.0) * 0.25 + pow(sun, 1200.0) * 4.0 * (0.35 + 0.9 * glitter);
-		colour += sunColour.rgb * sunDir.w * glint;
+		colour += sunColour.rgb * sunDir.w * glint * (1.0 - 0.8 * ice);
 	}
 
 	// Shoreline: turquoise shallows and a wide band of foam on the water side of the beach.
@@ -134,7 +147,7 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 		// The lace fades once a pixel is wider than it (no shimmer); the thin waterline survives much further.
 		float foam  = band * smoothstep(0.10, 0.36, lace + band * 0.35) * (1.0 - smoothstep(0.5, 2.5, footprint))
 		            + edge * 0.8 * (1.0 - smoothstep(2.0, 8.0, footprint));
-		foam = saturate(foam);
+		foam = saturate(foam) * (1.0 - ice);   // the ice covers the surf
 
 		vec3 foamColour = vec3(0.93, 0.96, 0.98) * (fogColour.rgb * 0.45 + sunColour.rgb * sunDir.w * 0.7);
 		colour = lerp(colour, foamColour, foam * 0.85);

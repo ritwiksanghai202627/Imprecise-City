@@ -58,6 +58,16 @@ void main(void) {
 		albedo = lerp(albedo, textureGrad(rockTex, IN.texCoord, dx, dy).rgb, rockAmount);
 	}
 
+	// Seasons (timeInfo: y = wetness, z = snow cover, w = autumn colour). Autumn turns grass to straw and rust,
+	// snow whitens flat ground above the beach (not cliffs), wet ground is darker.
+	if (timeInfo.y + timeInfo.z + timeInfo.w > 0.001) {
+		float grassOnly = (1.0 - sandAmount) * (1.0 - rockAmount);
+		albedo = lerp(albedo, albedo * vec3(1.55, 0.95, 0.45) + vec3(0.05, 0.02, 0.0), timeInfo.w * grassOnly);
+		float snowMask = timeInfo.z * smoothstep(0.55, 0.85, N.y) * smoothstep(1.5, 4.0, IN.worldPos.y);
+		albedo = lerp(albedo, vec3(0.90, 0.93, 0.98), snowMask * 0.95);
+		albedo *= 1.0 - 0.30 * timeInfo.y * (1.0 - snowMask);
+	}
+
 	// The main shore foam is drawn by the sea shader (on the water side, from the island height map).
 	// Here only a soft, wet-looking highlight on the lowest strip of beach, so the two meet without a seam.
 	float wash  = sin(timeInfo.x * 0.35 + wobbleNoise * 6.2831853) * 0.22;

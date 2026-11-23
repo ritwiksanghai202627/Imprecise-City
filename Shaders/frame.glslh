@@ -23,7 +23,7 @@ layout(std140, binding = 0) uniform FrameData {
 	vec4 sunDir;           // xyz = unit vector pointing TOWARDS the sun, w = intensity
 	vec4 sunColour;        // rgb
 	vec4 fogColour;        // rgb, w = fog density
-	vec4 timeInfo;         // x = seconds since start
+	vec4 timeInfo;         // x = seconds since start, y = wetness, z = snow cover, w = autumn colour
 	vec4 shadowParams;     // x = 1 / shadow map size, y = depth bias (far cascade), z = normal offset in world units (far cascade), w = shadows on
 	vec4 environment;      // x = night factor (0 day .. 1 night), y = point lights in use, z = spot lights in use, w = ambient scale
 	PointLight pointLights[MAX_POINT_LIGHTS];   // street lamps nearest the camera

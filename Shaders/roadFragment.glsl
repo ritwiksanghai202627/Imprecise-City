@@ -4,6 +4,8 @@
 #include "lighting.glslh"
 #include "sky.glslh"
 
+layout(binding = 5) uniform samplerCube envMap;   // the sky baked by the renderer (also used by the car and the sea)
+
 in Vertex {
 	vec3 worldPos;
 	vec3 normal;
@@ -38,6 +40,12 @@ void main(void) {
 		albedo = lerp(albedo, gravel, shoulder * 0.9);
 	}
 
+	// Seasons (timeInfo: y = wetness, z = snow cover). Patchy snow, thickest at the verges (the middle gets
+	// ploughed by traffic); wet asphalt is darker and, below, mirror-like at grazing angles.
+	float snow = timeInfo.z * saturate(0.55 * smoothstep(0.40, 0.65, broad) + 0.85 * (1.0 - smoothstep(0.0, 0.22, edgeDist)));
+	albedo = lerp(albedo, vec3(0.88, 0.90, 0.95), snow * 0.92);
+	albedo *= 1.0 - 0.45 * timeInfo.y * (1.0 - snow);
+
 	// Street-lamp pools on the asphalt, worked out from the road's own coordinates. The lamps stand
 	// every LAMP_SPACING metres alternating sides (see City::Generate), so the three lamps that can
 	// reach this pixel are known without any light list. Every lamp along the road therefore lights
@@ -69,6 +77,18 @@ void main(void) {
 	vec3  colour = ApplyDirectional(albedo, N, ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist))
 	             + albedo * lampLight
 	             + ApplySpotLights(albedo, N, IN.worldPos);   // the car's headlights
+
+	// Wet road: the sky (baked cube map) reflected with a Fresnel weight, so the far road shines like a mirror
+	// and the near road barely does. Rough noise breaks the mirror up into puddle-like patches.
+	float wet = timeInfo.y * (1.0 - snow);
+	if (wet > 0.01) {
+		vec3  V       = normalize(cameraPos.xyz - IN.worldPos);
+		vec3  R       = reflect(-V, N);
+		float fresnel = 0.03 + 0.97 * pow(1.0 - saturate(dot(N, V)), 4.0);
+		float puddle  = 0.55 + 0.45 * smoothstep(0.35, 0.65, ValueNoise(IN.worldPos.xz * 0.12));
+		colour += textureLod(envMap, R, 1.5).rgb * fresnel * puddle * wet * 0.85;
+		colour += lampLight * fresnel * wet * 0.6;   // lamps glint on the wet surface
+	}
 
 	fragColour = vec4(ApplyFog(colour, dist), 1.0);
 }

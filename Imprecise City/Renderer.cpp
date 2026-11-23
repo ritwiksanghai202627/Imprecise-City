@@ -36,6 +36,18 @@ namespace {
 	const float kTimePresets[5]  = { 12.0f, 16.5f, 18.4f, 0.0f, 6.2f };
 	const char* kTimePresetName[5] = { "noon", "afternoon", "dusk", "midnight", "dawn" };
 
+	// Seasons. Each row is what the weather moves towards: wetness, snow cover, autumn colour, rainfall, snowfall, overcast (all 0..1).
+	const int   kSeasonCount = 5;
+	const char* kSeasonName[kSeasonCount] = { "rain", "summer", "autumn", "winter", "spring" };
+	const float kSeasonTarget[kSeasonCount][6] = {
+		{ 1.00f, 0.0f, 0.0f, 1.00f, 0.0f, 0.85f },   // rain: soaked ground, heavy rain, dark sky
+		{ 0.00f, 0.0f, 0.0f, 0.00f, 0.0f, 0.00f },   // summer: dry and bright
+		{ 0.35f, 0.0f, 1.0f, 0.20f, 0.0f, 0.35f },   // autumn: rust leaves, a light drizzle
+		{ 0.10f, 1.0f, 0.0f, 0.00f, 1.0f, 0.55f },   // winter: snow cover and snowfall
+		{ 0.55f, 0.0f, 0.0f, 0.35f, 0.0f, 0.25f }    // spring: showers
+	};
+	const float kSeasonSeconds = 144.0f;   // one in-scene day (the clock runs a whole day in 144 s); change to 288 for two days per season
+
 	// Cinematic camera tuning
 	const float kCarSpeed      = 20.0f;   // metres per second
 	const float kPlayerLane    = 2.6f;    // the player drives in the right-hand lane, like the traffic
@@ -172,12 +184,19 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	glBufferData(GL_UNIFORM_BUFFER, sizeof(FrameData), nullptr, GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUBO);
 
+	// The weather starts AT the first season's values (rain), not blending towards them from dry.
+	{
+		float* state[6] = { &wetness, &snowCover, &autumnAmount, &rainFall, &snowFall, &overcast };
+		for (int i = 0; i < 6; ++i) { *state[i] = kSeasonTarget[season][i]; }
+	}
+
 	// Sun, sky and fog come from the time of day (starts at noon).
 	ApplyTimeOfDay();
 	BuildEnvironmentMap();   // needs the frame UBO and the sun / fog values above
 	lastBakedHour = timeOfDay;
 
 	glEnable(GL_DEPTH_TEST);
+	ApplyVSync();
 
 	lastTick = std::chrono::steady_clock::now();
 	init = true;
@@ -445,6 +464,40 @@ void Renderer::UpdateWalkers(float dt) {
 	}
 }
 
+// Moves the weather towards the current season's targets (about 4 seconds to blend), and, in automatic
+// mode, moves on to the next season after kSeasonSeconds. Everything else just reads the smoothed values.
+void Renderer::UpdateSeason(float dt) {
+	if (seasonAuto) {
+		seasonTimer += dt;
+		if (seasonTimer >= kSeasonSeconds) {
+			seasonTimer = 0.0f;
+			season = (season + 1) % kSeasonCount;
+		}
+	}
+	const float* target = kSeasonTarget[season];
+	const float  k = 1.0f - std::exp(-dt / 1.5f);   // frame-rate independent smoothing
+	float* state[6] = { &wetness, &snowCover, &autumnAmount, &rainFall, &snowFall, &overcast };
+	for (int i = 0; i < 6; ++i) {
+		*state[i] += (target[i] - *state[i]) * k;
+	}
+}
+
+// 0 = off, 1 = on, 2 = adaptive (WGL_EXT_swap_control_tear: vsync, but a late frame tears instead of waiting
+// a whole extra refresh, so 58 fps stays 58 instead of dropping to 30). nclgl never sets the swap interval, so
+// without this the driver's own setting decides.
+void Renderer::ApplyVSync() {
+	typedef BOOL (WINAPI* SwapIntervalFn)(int);
+	static SwapIntervalFn swapInterval = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"));
+	if (!swapInterval) {
+		return;
+	}
+	if (vsyncMode == 2 && !swapInterval(-1)) {
+		vsyncMode = 1;   // adaptive not supported here
+	}
+	if (vsyncMode == 1) { swapInterval(1); }
+	if (vsyncMode == 0) { swapInterval(0); }
+}
+
 // Sun, moon, sky and fog for the current hour. The sun travels east -> west over a tilted arc;
 // when it is below the horizon the same light slot becomes a dim blue moon (its mirror image), so
 // shadows and lighting keep working at night. Everything is a blend of three palettes: day, dusk, night.
@@ -475,6 +528,15 @@ void Renderer::ApplyTimeOfDay() {
 		density = duskDensity + (nightDensity - duskDensity) * t;
 		power   = (duskPower + (moonPower - duskPower) * t) * Smoothstep(0.0f, 0.12f, -elevation);   // moon fades in after sunset
 		lightDirection = Vector3(-sun.x, -sun.y, sun.z);   // the moon: mirror of the sun, above the horizon
+	}
+
+	// Overcast (rain, autumn drizzle, winter): the sky and fog go grey and thicker, and the sun weakens.
+	if (overcast > 0.001f) {
+		const float grey = 0.299f * fog.x + 0.587f * fog.y + 0.114f * fog.z;
+		fog     = Mix(fog,    Vector3(grey * 0.80f, grey * 0.84f, grey * 0.90f), overcast * 0.85f);
+		zenith  = Mix(zenith, Vector3(grey * 0.50f, grey * 0.55f, grey * 0.65f), overcast * 0.85f);
+		density *= 1.0f + 0.9f * overcast;
+		power   *= 1.0f - 0.65f * overcast;
 	}
 
 	sunDirection = lightDirection;
@@ -941,6 +1003,9 @@ void Renderer::RenderPostProcessing() {
 	glUniform1f(glGetUniformLocation(activeProgram, "fade"), fade);
 	glUniform1f(glGetUniformLocation(activeProgram, "lensAmount"), lensEnabled ? 1.0f : 0.0f);
 	glUniform1f(glGetUniformLocation(activeProgram, "grainSeed"), std::fmod(elapsedSeconds, 10.0f));
+	glUniform1f(glGetUniformLocation(activeProgram, "rainAmount"), rainFall);
+	glUniform1f(glGetUniformLocation(activeProgram, "snowAmount"), snowFall);
+	glUniform1f(glGetUniformLocation(activeProgram, "precipTime"), std::fmod(elapsedSeconds, 1000.0f));
 	seaMesh->Draw();
 
 	glActiveTexture(GL_TEXTURE0);
@@ -1004,6 +1069,9 @@ void Renderer::UpdateScene(float /*dt*/) {
 	if (keys->KeyTriggered(KEYBOARD_L)) { lensEnabled = !lensEnabled; }
 	if (keys->KeyTriggered(KEYBOARD_I)) { verboseTitle = !verboseTitle; }
 	if (keys->KeyTriggered(KEYBOARD_O)) { overlayEnabled = !overlayEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_P)) { season = (season + 1) % kSeasonCount; seasonTimer = 0.0f; std::cout << "Season: " << kSeasonName[season] << "\n"; }
+	if (keys->KeyTriggered(KEYBOARD_N)) { seasonAuto = !seasonAuto; }
+	if (keys->KeyTriggered(KEYBOARD_X)) { vsyncMode = (vsyncMode + 1) % 3; ApplyVSync(); }
 	if (keys->KeyTriggered(KEYBOARD_K)) { keysPanel = !keysPanel; if (keysPanel) { overlayEnabled = true; } }
 	if (timeAuto) {
 		timeOfDay += dt / 6.0f;   // 6 real seconds per hour: a whole day in 144 seconds
@@ -1028,6 +1096,7 @@ void Renderer::UpdateScene(float /*dt*/) {
 
 	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, shotFov);
 
+	UpdateSeason(dt);
 	ApplyTimeOfDay();
 	if (std::fabs(timeOfDay - lastBakedHour) > 0.04f) {
 		BuildEnvironmentMap();   // the car's reflections follow the sky (6 tiny draws; only when the hour moved)
@@ -1170,7 +1239,7 @@ void Renderer::UploadFrameData() {
 	frameData.shadowViewProj  = shadowProj[0] * shadowView[0];    // near cascade
 	frameData.shadowViewProj2 = shadowProj[1] * shadowView[1];    // far cascade
 	frameData.cameraPos       = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
-	frameData.timeInfo        = Vector4(elapsedSeconds, 0.0f, 0.0f, 0.0f);
+	frameData.timeInfo        = Vector4(elapsedSeconds, wetness, snowCover, autumnAmount);   // y wetness, z snow cover, w autumn colour (see the terrain / tree / building shaders)
 	// x = size of one shadow-map texel in UV units, y = depth bias, z = normal offset in world units, w = on/off
 	// The far cascade's values live in shadowParams (as the single map's did); the near cascade's in shadowCascade.
 	// A near texel is smaller, so its depth bias shrinks with it (never below 40%).
@@ -1590,6 +1659,11 @@ void Renderer::DrawOverlay() {
 		std::snprintf(buf, sizeof(buf), "fly speed x%.2f  (hold left / right mouse button: slower / faster)", freeCameraSpeed);
 		lines.push_back({ buf, white });
 	}
+	{
+		const char* vsyncName = vsyncMode == 0 ? "off" : vsyncMode == 1 ? "on" : "adaptive";
+		std::snprintf(buf, sizeof(buf), "season %s%s  vsync %s", kSeasonName[season], seasonAuto ? " (auto)" : "", vsyncName);
+		lines.push_back({ buf, white });
+	}
 	std::snprintf(buf, sizeof(buf), "bloom %s  vignette %s  lens %s  shadows %s", bloomEnabled ? on : off, vignetteEnabled ? on : off, lensEnabled ? on : off, shadowsEnabled ? on : off);
 	lines.push_back({ buf, white });
 	std::snprintf(buf, sizeof(buf), "draws %u (+%u shadow)  tris %u  nodes %u/%u", stats.drawCalls, stats.shadowDraws, stats.triangles, stats.nodesDrawn, stats.nodesTotal);
@@ -1614,6 +1688,8 @@ void Renderer::DrawOverlay() {
 		lines.push_back({ "B   bloom   V   vignette + grade   L   lens (aberration + grain)", white });
 		lines.push_back({ "R   render scale 100 / 85 / 70 %", white });
 		lines.push_back({ "H   shadows   F   freeze culling frustum", white });
+		lines.push_back({ "P   next season   N   auto seasons on / off", white });
+		lines.push_back({ "X   vsync: off / on / adaptive", white });
 	}
 
 	overlay->Begin(width, height);

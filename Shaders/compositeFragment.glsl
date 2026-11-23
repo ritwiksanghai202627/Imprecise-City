@@ -10,6 +10,9 @@ uniform float vignetteAmount;   // 0 = vignette and colour grade off
 uniform float fade;             // 0 = normal, 1 = black
 uniform float lensAmount;       // 0 = off; chromatic aberration at the edges + a little film grain
 uniform float grainSeed;        // changes every frame so the grain moves
+uniform float rainAmount;       // 0..1 rain streaks
+uniform float snowAmount;       // 0..1 snow flakes
+uniform float precipTime;       // seconds, drives the fall
 
 in vec2 uv;
 out vec4 fragColour;
@@ -19,6 +22,37 @@ out vec4 fragColour;
 vec3 ToneMap(vec3 x) {
 	vec3 over = max(x - 0.8, vec3(0.0));
 	return min(x, vec3(0.8)) + 0.2 * (1.0 - exp(-over / 0.2));
+}
+
+float CellHash(vec2 id) {
+	return fract(sin(dot(id, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Screen-space rain: thin slanted streaks in a grid of tall cells, three layers (near = long and fast, far = short and faint).
+// No geometry and no particles; the cost is a few ALU operations per pixel, and only while it is raining.
+float RainLayer(vec2 uv, float aspect, float density, float t) {
+	vec2 p = vec2(uv.x * aspect * density, uv.y * density * 0.08);
+	p.y += t * density * 0.10;
+	p.x += p.y * 0.12;                         // a slight slant: the wind
+	vec2  id = floor(p);
+	vec2  f  = fract(p);
+	float h  = CellHash(id);
+	float x  = 0.15 + 0.7 * fract(h * 7.31);   // where the streak sits in its cell
+	float streak = smoothstep(0.05, 0.0, abs(f.x - x)) * smoothstep(0.0, 0.1, f.y) * (1.0 - smoothstep(0.1, 0.55, f.y));
+	return step(0.60, h) * streak;
+}
+
+// Screen-space snow: soft round flakes of different sizes, each wandering inside its own grid cell as it falls.
+// Three layers (big and soft = near, small and faint = far) give a sense of depth. Sparse on purpose.
+float SnowLayer(vec2 uv, float aspect, float density, float t) {
+	vec2 p = vec2(uv.x * aspect, uv.y) * density;
+	p.y += t * density * 0.09;
+	vec2  id = floor(p);
+	vec2  f  = fract(p);
+	float h  = CellHash(id);
+	vec2  c  = vec2(0.5 + 0.28 * sin(t * (0.5 + h) + h * 30.0), 0.25 + 0.5 * fract(h * 31.0));
+	float r  = mix(0.07, 0.17, fract(h * 53.0));
+	return step(0.78, h) * smoothstep(r, r * 0.35, length(f - c));
 }
 
 void main(void) {
@@ -43,6 +77,18 @@ void main(void) {
 		float luma = dot(colour, vec3(0.299, 0.587, 0.114));
 		colour = mix(vec3(luma), colour, 1.10);
 		colour = (colour - 0.5) * 1.05 + 0.5;
+	}
+
+	if (rainAmount > 0.01 || snowAmount > 0.01) {
+		float aspect = float(textureSize(sceneTex, 0).x) / float(textureSize(sceneTex, 0).y);
+		if (rainAmount > 0.01) {
+			float r = RainLayer(uv, aspect, 70.0, precipTime) + RainLayer(uv, aspect, 120.0, precipTime) * 0.8 + RainLayer(uv, aspect, 190.0, precipTime) * 0.6;
+			colour += vec3(0.55, 0.62, 0.72) * r * 0.55 * rainAmount;
+		}
+		if (snowAmount > 0.01) {
+			float f = SnowLayer(uv, aspect, 14.0, precipTime) + SnowLayer(uv, aspect, 28.0, precipTime) * 0.7 + SnowLayer(uv, aspect, 52.0, precipTime) * 0.5;
+			colour += vec3(0.92, 0.95, 1.0) * f * 0.55 * snowAmount;
+		}
 	}
 
 	if (lensAmount > 0.0) {
