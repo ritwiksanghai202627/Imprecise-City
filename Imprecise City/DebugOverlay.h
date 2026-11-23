@@ -2,10 +2,10 @@
 
 // Debug overlay: text and translucent panels drawn in screen pixels on top of the finished frame.
 //
-// Header-only on purpose, so there is no project file to add. Windows only: the font atlas is
-// rasterised once at start-up with GDI (Consolas, or whatever monospace font Windows substitutes),
-// so no font file and no third-party library is needed. Ninety-six glyphs (ASCII 32..127) go into
-// one small R8 texture; every frame the text becomes two triangles per character in one buffer.
+// Header-only. Windows only: the font atlas is rasterised once with GDI (Consolas, or the
+// substituted monospace font), so no font file or third-party library is needed. Ninety-six
+// glyphs (ASCII 32..127) go into one R8 texture; each frame the text becomes two triangles per
+// character in one buffer.
 //
 // Usage per frame:  Begin() -> Panel() / Text() calls -> bind GetShader() -> Draw().
 

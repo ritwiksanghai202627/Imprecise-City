@@ -26,9 +26,7 @@ void main(void) {
 	vec3 grass = 0.6 * texture(grassTex, IN.texCoord).rgb
 	           + 0.4 * texture(grassTex, IN.texCoord * 0.173 + vec2(0.37, 0.11)).rgb;
 
-	// Slow colour variation, so a big field is not one flat green. The same noise field also
-	// wobbles the beach and rock thresholds below: at these scales the eye cannot tell that the
-	// tint and the shoreline share a field, and one ValueNoise is measurably cheaper than two.
+	// One noise field for the colour variation and the beach / rock height thresholds.
 	float wobbleNoise = ValueNoise(xz * 0.035);
 	float wobble      = (wobbleNoise - 0.5) * 7.0;
 	grass *= 0.85 + 0.30 * wobbleNoise;
@@ -37,8 +35,7 @@ void main(void) {
 	float sandAmount = 1.0 - smoothstep(2.0, 10.0, IN.worldPos.y + wobble);
 	float rockAmount = smoothstep(0.20, 0.40, slope + wobble * 0.02);
 
-	// Texture lookups inside an 'if' need explicit derivatives, otherwise mip selection is
-	// undefined where neighbouring pixels take different branches (visible as seams).
+	// Conditional texture fetches need explicit derivatives for correct mip selection.
 	vec2 dx = dFdx(IN.texCoord);
 	vec2 dy = dFdy(IN.texCoord);
 
@@ -47,8 +44,7 @@ void main(void) {
 	if (sandAmount > 0.001) {
 		vec3 sand = textureGrad(sandTex, IN.texCoord, dx, dy).rgb;
 
-		// Wet sand just above the waterline: darker, so the beach darkens into the sea instead
-		// of stopping at a bright edge.
+		// Wet sand just above the waterline.
 		float wet = 1.0 - smoothstep(0.0, 2.2, IN.worldPos.y + wobble * 0.15);
 		sand *= lerp(1.0, 0.55, wet);
 
@@ -68,8 +64,7 @@ void main(void) {
 		albedo *= 1.0 - 0.30 * timeInfo.y * (1.0 - snowMask);
 	}
 
-	// The main shore foam is drawn by the sea shader (on the water side, from the island height map).
-	// Here only a soft, wet-looking highlight on the lowest strip of beach, so the two meet without a seam.
+	// A soft highlight on the lowest strip of beach; the sea shader draws the main foam.
 	float wash  = sin(timeInfo.x * 0.35 + wobbleNoise * 6.2831853) * 0.22;
 	float shore = 1.0 - smoothstep(0.02, 0.95, IN.worldPos.y + wobble * 0.18 - wash);
 	if (shore > 0.001) {

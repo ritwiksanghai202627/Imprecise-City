@@ -2,11 +2,8 @@
 
 #include "../nclgl/SceneNode.h"
 
-// Which shader/material a drawable node uses. The renderer sorts opaque nodes by this
-// first, so each shader is bound once per frame instead of once per node.
-// Order matters for early-z: big occluders (buildings) are drawn before the ground, so the
-// expensive terrain shader never runs for pixels a building has already covered. Terrain goes
-// last because it is the largest surface and the thing most often hidden.
+// Which shader/material a drawable node uses. Opaque nodes sort by this first, then by distance.
+// Buildings come before the ground so early-z rejects the terrain they cover.
 enum class Material { Building, Tree, Road, Lit, Car, Skinned, Terrain, Sea };
 
 /*

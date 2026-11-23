@@ -47,7 +47,7 @@ struct FrameData {
 	Vector4 environment;   // x = night factor, y = point lights used, z = spot lights used, w = ambient scale
 	GpuPointLight pointLights[kMaxPointLights];
 	GpuSpotLight  spotLights[kMaxSpotLights];
-	// Second shadow cascade, appended at the END so every earlier offset is unchanged (see frame.glslh).
+	// Second shadow cascade, appended at the end (see frame.glslh).
 	Matrix4 shadowViewProj2;   // far cascade; 'shadowViewProj' above is the near one
 	Vector4 shadowCascade;     // x = normal offset (world units), y = depth bias, both for the near cascade
 };
@@ -55,7 +55,7 @@ static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
 static_assert(sizeof(FrameData) == 3 * 64 + 7 * 16 + kMaxPointLights * 32 + kMaxSpotLights * 48 + 64 + 16, "FrameData must match the std140 block in frame.glslh");
 
-// Per-frame counters, shown in the window title.
+// Per-frame counters, shown in the debug overlay.
 struct FrameStats {
 	unsigned nodesTotal = 0;   // drawable nodes in the scene
 	unsigned nodesDrawn = 0;   // ...that survived culling

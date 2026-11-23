@@ -33,8 +33,7 @@ public:
 	float    ClipDuration(unsigned clip) const;   // seconds
 
 	// Bone matrices (animated pose x inverse bind pose) for 'seconds' into the clip, looping.
-	// Frames are baked at 30 fps by the loader; we blend neighbouring frames so motion stays
-	// smooth at 60+ fps and in slow motion.
+	// Frames are baked at 30 fps; neighbouring frames are blended for smooth motion at 60+ fps.
 	void Pose(unsigned clip, float seconds, std::vector<Matrix4>& out) const;
 
 private:

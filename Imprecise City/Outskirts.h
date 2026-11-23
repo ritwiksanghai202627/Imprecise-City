@@ -1,11 +1,8 @@
 #pragma once
 
-// The land outside the city: trees (two species, instanced, swaying in the wind) and a small village
-// beside the road. Header-only, like DebugOverlay.h, so there is no project file to add.
-//
-// This file only makes DATA (instance lists) and the three small meshes. The Renderer uploads each
-// list to a shader storage buffer and draws it with one instanced call per 192 m patch (the same
-// scheme as the city), so patches off screen or outside the shadow box are frustum-culled.
+// Trees and a small village outside the city. Header-only, like DebugOverlay.h.
+// Builds instance lists and three small meshes; the Renderer uploads them and draws each 192 m
+// patch with one instanced call, so patches are frustum-culled like the city.
 //
 // Instance layout (CityInstance, see City.h):
 //   tree:   position = base of the trunk, sx = sz = crown width, sy = height (metres),
@@ -29,7 +26,7 @@ namespace Outskirts {
 namespace detail {
 	const float kPi = 3.14159265f;
 
-	// Same input -> same output every run, so the island looks identical every time.
+	// Deterministic hash.
 	inline float Hash(int a, int b, int salt) {
 		unsigned int n = static_cast<unsigned int>(a) * 374761393u + static_cast<unsigned int>(b) * 668265263u
 		               + static_cast<unsigned int>(salt) * 2147483647u;
@@ -57,8 +54,7 @@ namespace detail {
 		return top + (bottom - top) * tz;
 	}
 
-	// Road samples bucketed into 32 m cells: "how far is the road from here?" looks at 9 buckets
-	// instead of every sample (the closed road has about a thousand).
+	// Road samples bucketed into 32 m cells for a fast nearest-road query.
 	class RoadGrid {
 	public:
 		explicit RoadGrid(const RoadPath& road) : cells(kSide * kSide) {
@@ -94,10 +90,7 @@ namespace detail {
 	};
 }
 
-// ------------------------------------------------------------------------------------------------
-// Meshes. All three are built in "unit space": x and z within -0.5..0.5, y from 0 (ground) to 1.
-// The instance's size scales them; the tree shader tells trunk from leaves by position.
-// ------------------------------------------------------------------------------------------------
+// Meshes are built in unit space: x,z in -0.5..0.5, y from 0 (ground) to 1. Instance size scales them.
 struct MeshData {
 	std::vector<Vector3> p, n;
 	std::vector<Vector2> uv;
@@ -107,8 +100,7 @@ struct MeshData {
 		p.push_back(pos); n.push_back(nor); uv.push_back(Vector2(0.0f, 0.0f));
 		return static_cast<unsigned int>(p.size() - 1);
 	}
-	// Adds a triangle, swapping two corners if needed so that it faces the way its normals point
-	// (counter-clockwise seen from outside): no hand-checking of winding order.
+	// Adds a triangle, flipping two corners if needed so its winding matches the vertex normals.
 	void Tri(unsigned int a, unsigned int b, unsigned int c) {
 		const Vector3 e1 = p[b] - p[a], e2 = p[c] - p[a];
 		const Vector3 g(e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z, e1.x * e2.y - e1.y * e2.x);
@@ -212,13 +204,10 @@ inline ProceduralMesh* BuildRoof() {   // gable roof: ridge along x, 10 triangle
 	return m.Build();
 }
 
-// ------------------------------------------------------------------------------------------------
 // Placement
-// ------------------------------------------------------------------------------------------------
 
-// Looks along the road for flat dry land far from the city; returns where the village goes.
-// Strict rules first; if no spot passes, the rules loosen (a village on rougher ground is better
-// than none: the first version only tried the strict rules and found nothing on this island).
+// Looks along the road for flat dry land far from the city. Tries stricter rules first, then
+// loosens them if no site passes.
 inline bool FindVillageSite(const RoadPath& road, const Terrain& terrain, bool hasCity, const Vector3& cityCentre,
                             Vector3& centre, float& roadDistance) {
 	const std::vector<Vector3>& pts = road.GetPoints();
@@ -290,8 +279,7 @@ inline void Generate(const RoadPath& road, const Terrain& terrain, bool hasCity,
 				const float   cx = p.x + right.x * side * offset, cz = p.z + right.z * side * offset;
 				const float   fx = 8.0f + 4.0f * Hash(k, s, 23), fz = 7.0f + 3.0f * Hash(k, s, 24);
 
-				// Level of the ground under the four corners: the house stands on the lowest one and
-				// its walls reach up to the highest, so nothing hangs in the air on a slope.
+				// House sits on the lowest corner, walls reach the highest, so it never floats on a slope.
 				float lo = 1e9f, hi = -1e9f;
 				for (int c = 0; c < 4; ++c) {
 					const float ax = (c & 1) ? 0.5f * fx : -0.5f * fx, az = (c & 2) ? 0.5f * fz : -0.5f * fz;

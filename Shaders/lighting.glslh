@@ -2,8 +2,7 @@
 // Needs frame.glslh and support.glslh to be included before this file.
 
 // Two cascaded shadow maps, one layer each of a depth texture array bound by the renderer.
-// Layer 0 (near cascade) is a small box right around the viewer: very sharp shadows close up.
-// Layer 1 (far cascade) is the big box that follows the camera, as the single map used to be.
+// Layer 0 is a small box around the viewer for sharp near shadows; layer 1 is the large box.
 layout(binding = 4) uniform sampler2DArrayShadow shadowMap;
 
 // 4-tap percentage-closer filtering in one cascade. Each hardware depth compare already blends a
@@ -80,10 +79,7 @@ vec3 ApplyDirectional(vec3 albedo, vec3 N, float shadow) {
 }
 
 // Local lights: street lamps (point) and car headlights (spot). Counts come from the frame UBO,
-// so by day (no lights on) the loops do nothing. Cheap falloff: linear fade squared, zero at the radius.
-// Beyond 70 m from the camera the lights are skipped. A lamp's own radius is only ~45 m, so a surface
-// further out than that receives nothing anyway; culling here removes the loop from most night pixels
-// (distant lamps are simply not rendered, which is the accepted trade for frame rate).
+// so by day the loops do nothing. A lamp's radius is ~45 m, so surfaces beyond 70 m are skipped.
 const float LIGHT_CULL_DISTANCE = 70.0;
 
 vec3 ApplyPointLights(vec3 albedo, vec3 N, vec3 worldPos) {

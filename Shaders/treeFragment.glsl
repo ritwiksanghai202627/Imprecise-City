@@ -13,8 +13,8 @@ flat in float style;
 
 out vec4 fragColour;
 
-// Trees are untextured: trunk or leaves is decided from the position in the unit tree, and the
-// colour from the species and a per-tree seed, so no two neighbours look identical.
+// Trees are untextured: trunk or leaves comes from the position in the unit tree, colour from
+// the species and a per-tree seed.
 void main(void) {
 	vec3 N = normalize(IN.normal);
 

@@ -28,8 +28,7 @@ float CellHash(vec2 id) {
 	return fract(sin(dot(id, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-// Screen-space rain: thin slanted streaks in a grid of tall cells, three layers (near = long and fast, far = short and faint).
-// No geometry and no particles; the cost is a few ALU operations per pixel, and only while it is raining.
+// Screen-space rain: thin slanted streaks in three layers (near = long and fast, far = short and faint).
 float RainLayer(vec2 uv, float aspect, float density, float t) {
 	vec2 p = vec2(uv.x * aspect * density, uv.y * density * 0.08);
 	p.y += t * density * 0.10;
@@ -42,8 +41,7 @@ float RainLayer(vec2 uv, float aspect, float density, float t) {
 	return step(0.60, h) * streak;
 }
 
-// Screen-space snow: soft round flakes of different sizes, each wandering inside its own grid cell as it falls.
-// Three layers (big and soft = near, small and faint = far) give a sense of depth. Sparse on purpose.
+// Screen-space snow: soft flakes in three layers (big and soft = near, small and faint = far).
 float SnowLayer(vec2 uv, float aspect, float density, float t) {
 	vec2 p = vec2(uv.x * aspect, uv.y) * density;
 	p.y += t * density * 0.09;

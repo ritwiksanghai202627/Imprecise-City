@@ -14,7 +14,7 @@ namespace {
 		return t * t * (3.0f - 2.0f * t);
 	}
 
-	// Integer hash -> 0..1. Gives the same value for the same lattice point every run.
+	// Deterministic integer hash to 0..1.
 	float Hash2D(int x, int y) {
 		unsigned int n = static_cast<unsigned int>(x) * 374761393u + static_cast<unsigned int>(y) * 668265263u;
 		n = (n ^ (n >> 13)) * 1274126177u;
@@ -112,10 +112,8 @@ void Terrain::CarveRoad(const RoadPath& road) {
 	const int   radius = static_cast<int>(std::ceil(shoulderWidth / cellSize)) + 1;
 
 	// For every grid vertex remember the closest point on the road and the road height there.
-	// Each road SEGMENT is splatted onto the few vertices around it (far cheaper than testing every
-	// vertex against every road point). Using the closest point on the segment, with the height
-	// interpolated along it, keeps the terrain exactly under the asphalt on bends and slopes
-	// (using the nearest sample's height left small gaps there).
+	// Each road SEGMENT is splatted onto nearby vertices. The closest point on the segment gives
+	// the terrain the same height as the asphalt on bends and slopes.
 	const size_t count = heights.size();
 	std::vector<float> nearest(count, std::numeric_limits<float>::max());
 	std::vector<float> roadHeight(count, 0.0f);
@@ -271,9 +269,7 @@ float Terrain::HeightAt(float x, float z) const {
 	const float h01 = heights[static_cast<size_t>(iz + 1) * gridSize + ix];
 	const float h11 = heights[static_cast<size_t>(iz + 1) * gridSize + ix + 1];
 
-	// The mesh splits every cell along the b-c diagonal (see the index list above), so interpolate
-	// on the triangle the point is actually in. Plain bilinear differs from the drawn surface by up
-	// to tens of centimetres on slopes, which made characters float.
+	// Interpolate on the triangle the point is actually in, so the sampled height matches the mesh.
 	if (fx + fz <= 1.0f) {   // triangle (a, b, c)
 		return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
 	}

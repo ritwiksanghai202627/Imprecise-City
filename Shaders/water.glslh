@@ -1,4 +1,4 @@
-// Water shading shared by the sea now, and by the puddle / boat later.
+// Water shading shared by the sea and the distant sea painted in the sky.
 // Needs support.glslh included first.
 
 // Island height map (terrain height in metres, 512 x 512 over x,z in [-SHORE_EXTENT, +SHORE_EXTENT]),
@@ -11,26 +11,16 @@ float WaterDepth(vec2 xz) {
 	return -texture(shoreMap, xz / (2.0 * SHORE_EXTENT) + 0.5).r;
 }
 
-// 1 while the wave is well resolved, 0 once one pixel covers about half a wavelength.
-// Nyquist says a sine is unresolved at half a wavelength, so fading a little before that is
-// enough. The previous 0.10-0.33 window was far too conservative: at eye level it flattened the
-// sea only ~100 m out, which read as the ripples "dying" in the middle distance.
+// 1 while a wave is resolved, 0 once a pixel covers about half its wavelength.
 float WaveFade(float wavelength, float footprint) {
 	return 1.0 - smoothstep(wavelength * 0.22, wavelength * 0.55, footprint);
 }
 
-// Analytic normal for nine directional wave trains. Summing slopes (the gradient) instead of
-// sampling a height field means no textures and no finite differences.
-//
-// footprint = world-space size of one pixel on the water (max of fwidth(worldPos.xz)). Fading by
-// footprint instead of by distance handles distance *and* viewing angle in one term: looking
-// along the surface, one pixel covers many metres of water long before it is far away, and that
-// is exactly where the banding used to appear.
-//
-// The trains are spread around the compass and deliberately incommensurate (no 2:1 ratios), and
-// the warp bends the crests, so there is no repeating lattice left to read as concentric ripples.
-// The three long swells are what keep the surface from turning into a mirror in the mid distance:
-// short ripples are always the first to go, so without them the sea looks polished just offshore.
+// Analytic normal from nine directional wave trains: sum their slopes, no textures or finite
+// differences. 'footprint' is the world-space size of a pixel (max of fwidth(worldPos.xz));
+// fading by it handles both distance and viewing angle. The trains use incommensurate
+// wavelengths and a noise warp so the crests never settle into a repeating lattice. The three
+// long swells keep the surface from going mirror-flat in the mid distance.
 vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	vec2 d0 = normalize(vec2( 0.97,  0.26));
 	vec2 d1 = normalize(vec2( 0.21,  0.98));
@@ -54,8 +44,7 @@ vec3 WaterNormal(vec2 xz, float time, float footprint) {
 
 	float warp = ValueNoise(xz * 0.03) * 4.0;
 
-	// Each train is skipped when its fade has reached zero. Distant pixels take every branch the
-	// same way, so this is a real saving on the large sea areas rather than divergent shuffling.
+	// Skip trains whose fade has reached zero.
 	vec2 slope = vec2(0.0);
 	float f0 = WaveFade( 23.0, footprint);
 	if (f0 > 0.001) slope += d0 * (0.095 * f0) * cos(dot(d0, xz) * k0 - time * 2.0 + warp);
@@ -70,7 +59,7 @@ vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	float f5 = WaveFade(  1.4, footprint);
 	if (f5 > 0.001) slope += d5 * (0.016 * f5) * cos(dot(d5, xz) * k5 - time * 6.4 + warp * 3.9);
 
-	// Long swells: survive to a much larger footprint, so the mid/far sea keeps some shape.
+	// Long swells survive a much larger footprint, keeping some shape in the mid/far sea.
 	float f6 = WaveFade(137.0, footprint);
 	if (f6 > 0.001) slope += d6 * (0.020 * f6) * cos(dot(d6, xz) * k6 - time * 1.05 + warp * 0.6);
 	float f7 = WaveFade( 61.0, footprint);
@@ -81,9 +70,7 @@ vec3 WaterNormal(vec2 xz, float time, float footprint) {
 	return normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
-// Sparse twinkles that ride on the wave slopes; multiplied into the tight sun highlight.
-// 'footprint' fades them out where a pixel is wider than a sparkle, so they stay sparkles
-// instead of becoming noise. The early-out avoids two noise evaluations on distant water.
+// Sparse glints riding on the wave slopes. The early-out avoids the noise cost on distant water.
 float WaterGlitter(vec2 xz, float time, float footprint) {
 	if (footprint > 1.6) {
 		return 0.0;
@@ -93,9 +80,8 @@ float WaterGlitter(vec2 xz, float time, float footprint) {
 	return smoothstep(0.55, 0.75, n) * (1.0 - smoothstep(0.45, 1.60, footprint));
 }
 
-// Full surface colour for a point on the water, shared by the real sea quad and by the distant
-// sea the sky paints where that quad runs out. 'envMap' is bound to unit 5 for the whole main pass.
-// Needs lighting.glslh (ApplyFog) included before this file.
+// Full surface colour, shared by the sea quad and the sea painted in the sky.
+// Needs lighting.glslh (ApplyFog) included first. envMap is bound to unit 5.
 vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube envMap) {
 	// Winter (timeInfo.z = snow cover): the sea freezes over. Waves flatten, then the surface becomes ice.
 	float ice = saturate(timeInfo.z);
@@ -110,7 +96,7 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 	vec3  colour  = lerp(deep, sky, saturate(0.08 + 0.92 * fresnel));
 
 	if (ice > 0.01) {
-		// Ice: pale blue-white with slow patches and a few crack lines, lit by the sky and (a little) the sun.
+		// Ice: pale blue-white, with slow patches and crack lines.
 		float patchN = ValueNoise(worldPos.xz * 0.04);
 		float crackN = abs(ValueNoise(worldPos.xz * 0.22 + 9.0) - 0.5);
 		vec3  iceCol = lerp(vec3(0.52, 0.68, 0.80), vec3(0.86, 0.92, 0.97), smoothstep(0.30, 0.75, patchN));
@@ -119,7 +105,7 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 		colour = lerp(colour, iceCol * lit * 1.4 + sky * fresnel * 0.25, ice * 0.92);
 	}
 
-	// Tight analytic glint: the cube map's sun disc is blurry at 128^2, so restore the sparkle.
+	// Tight sun glint on top of the blurred cube-map disc.
 	float sun = saturate(dot(R, sunDir.xyz));
 	if (sun > 0.10) {
 		float glitter = WaterGlitter(worldPos.xz, timeInfo.x, footprint);
@@ -127,24 +113,23 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 		colour += sunColour.rgb * sunDir.w * glint * (1.0 - 0.8 * ice);
 	}
 
-	// Shoreline: turquoise shallows and a wide band of foam on the water side of the beach.
-	// Only near the camera (beyond ~1.8 km the detail is sub-pixel and fog dominates anyway).
+	// Turquoise shallows and foam on the water side of the beach, near the camera only.
 	if (dist < 1800.0) {
 		float depth = WaterDepth(worldPos.xz);
-		if (depth < 9.0) {   // open water skips all the noise below: only the shallows pay for foam
-		float day   = saturate(sunDir.w);   // 1 by day, small by moonlight: keeps the shallows from glowing at night
+		if (depth < 9.0) {
+		float day   = saturate(sunDir.w);
 
 		float shallow = 1.0 - smoothstep(0.4, 9.0, depth);
 		colour = lerp(colour, vec3(0.10, 0.42, 0.46) * (0.25 + 0.75 * day), shallow * 0.5 * (1.0 - fresnel));
 
-		// Foam bands travel towards the beach; the wobble and the lace noise break them up.
+		// Foam bands travel towards the beach, broken up by noise.
 		float warp  = ValueNoise(worldPos.xz * 0.08) * 6.0;
 		float wave  = 0.5 + 0.5 * sin(depth * 2.2 - timeInfo.x * 1.3 + warp);
 		float band  = 1.0 - smoothstep(0.0, 3.4, depth + (wave - 0.5) * 1.0);
 		float edge  = 1.0 - smoothstep(0.0, 0.7, depth);   // a solid line right at the waterline
 		float lace  = ValueNoise(worldPos.xz * 1.3 + vec2(timeInfo.x * 0.15, 0.0))
 		            * ValueNoise(worldPos.xz * 3.1 - vec2(0.0, timeInfo.x * 0.10));
-		// The lace fades once a pixel is wider than it (no shimmer); the thin waterline survives much further.
+		// The lace fades once a pixel is wider than it; the thin waterline survives much further.
 		float foam  = band * smoothstep(0.10, 0.36, lace + band * 0.35) * (1.0 - smoothstep(0.5, 2.5, footprint))
 		            + edge * 0.8 * (1.0 - smoothstep(2.0, 8.0, footprint));
 		foam = saturate(foam) * (1.0 - ice);   // the ice covers the surf
@@ -154,7 +139,6 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 		}
 	}
 
-	// Both the quad and the sky-painted sea use the same thinner haze, so the join is seamless and
-	// the surface stays readable further out instead of turning into a flat band of pure fog.
+	// Thinner haze than the terrain keeps the distant sea readable.
 	return ApplyFog(colour, dist, 0.5);
 }

@@ -1,14 +1,11 @@
-// One analytic sky, used twice: drawn behind the scene (skyFragment) and baked into the
-// environment cube map that shiny objects reflect (bakeSkyFragment). Using the same function
-// guarantees the reflections match what you see in the sky.
-// Needs frame.glslh and support.glslh included first.
+// One analytic sky, used for both the visible background and the environment cube map, so
+// reflections match. Needs frame.glslh and support.glslh included first.
 
 uniform vec3 zenithColour;   // sky colour straight up; the horizon colour is the fog colour
 
-// Procedural clouds. Project the view direction onto a flat cloud deck, then evaluate four
-// octaves of value noise. Returns rgb + coverage so SkyColour can composite them over the sun.
-// Only sampled above the horizon, and faded out near it to hide the stretched, aliasing-prone
-// band where the projection compresses to infinity.
+// Four octaves of value noise projected onto a flat cloud deck. Returns rgb + coverage for
+// SkyColour to composite over the sun. Only above the horizon, fading out near it where the
+// projection stretches badly.
 vec4 CloudLayer(vec3 d) {
 	float above = smoothstep(0.005, 0.06, d.y);
 	if (above <= 0.0) {
@@ -47,10 +44,8 @@ vec4 CloudLayer(vec3 d) {
 	return vec4(cloud, cover * above);
 }
 
-// Cloud shadows on the ground. Project the world position along the sun onto a flat deck and
-// reuse the same value noise, so the shadows drift with the clouds. One octave is enough for soft
-// blobs, and the whole thing is skipped when shadows are off (H), at night, or far away where fog
-// has already washed the ground out. That last early-out is what pays for applying it everywhere.
+// Cloud shadows on the ground: the position projected along the sun onto the cloud deck, using
+// the same noise and drift as CloudLayer. Skipped when shadows are off, at night, or far away.
 float CloudShadow(vec3 worldPos, float dist) {
 	if (shadowParams.w < 0.5 || sunDir.y < 0.05 || dist > 4200.0) {
 		return 1.0;

@@ -23,11 +23,11 @@ namespace {
 	}
 	Vector3 Mix(const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; }
 
-	// Cinematic shots: how long each plays (seconds). EvaluateShot has the matching camera moves.
+	// Cinematic shots: how long each plays (seconds).
 	const float kShotLength[14] = { 12.0f, 12.0f, 12.0f, 9.0f, 12.0f, 7.0f, 8.0f, 8.0f, 10.0f, 9.0f, 11.0f, 7.0f, 8.0f, 9.0f };   // 134 s in total
 	const bool  kShotNeedsCity[14] = { false, false, true, false, true, true, false, false, false, false, true, false, false, false };
 
-	const float kStartDelay = 2.0f;                        // seconds of black before anything moves
+	const float kStartDelay = 1.0f;                        // seconds of black before anything moves (for timing the video recording)
 	const float kRenderScales[3] = { 1.0f, 0.85f, 0.7f };  // R key: internal resolution of the scene
 
 	float MixF(float a, float b, float t) { return a + (b - a) * t; }
@@ -132,7 +132,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
 	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
-	// Debug overlay (O / K / I). Not fatal if it fails: it is a debugging aid, the scene does not need it.
+	// Debug overlay (O / K / I); the scene runs without it.
 	overlay = std::make_unique<DebugOverlay>();
 	if (!overlay->Create(height)) {
 		std::cout << "Renderer: debug overlay unavailable (see messages above).\n";
@@ -184,7 +184,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	glBufferData(GL_UNIFORM_BUFFER, sizeof(FrameData), nullptr, GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUBO);
 
-	// The weather starts AT the first season's values (rain), not blending towards them from dry.
+	// The weather starts at the first season's values (rain), not blended from dry.
 	{
 		float* state[6] = { &wetness, &snowCover, &autumnAmount, &rainFall, &snowFall, &overcast };
 		for (int i = 0; i < 6; ++i) { *state[i] = kSeasonTarget[season][i]; }
@@ -232,7 +232,7 @@ void Renderer::EndGpuTimer() {
 	glEndQuery(GL_TIME_ELAPSED);
 }
 
-// Reads the OTHER set (issued last frame), which the GPU has almost certainly finished.
+// Reads the other set, issued last frame, so the read never stalls.
 void Renderer::ReadGpuTimers() {
 	if (!queriesPrimed) {
 		return;
@@ -261,12 +261,9 @@ void Renderer::ReadGpuTimers() {
 //   +-- car
 //   +-- walkers (skinned, animated people; see BuildWalkers)
 //   +-- sea (transparent list)
-// Only nodes with a mesh are drawn or culled. Grouping nodes exist so later batches can
-// hang things (wheels on the car, buildings in a district) off one parent transform.
-// Samples the carved terrain on a 512 x 512 grid covering the whole island and uploads it as a
-// 16-bit float texture. The sea shader reads it to know how deep the water is at any point, which
-// is what lets the foam and the shallow-water tint follow the real shoreline on the WATER side
-// (the terrain itself only ever shows the beach above y = 0).
+// Only nodes with a mesh are drawn or culled; groups exist to share one parent transform.
+// Samples the carved terrain into a 512x512 float texture. The sea shader uses it to place foam
+// and shallow-water tint on the water side of the shoreline.
 void Renderer::BuildShoreTexture() {
 	const int   size   = 512;
 	const float extent = terrain->GetHalfExtent();
@@ -316,8 +313,7 @@ void Renderer::BuildScene() {
 	carNode->SetBoundingRadius(3.0f);
 	root->AddChild(carNode);
 
-	// The sea quad is rotated flat and scaled huge; it has no alpha yet, but it lives in the
-	// transparent list so sorting and blending are already in place when the water gets alpha.
+	// The sea quad is rotated flat and scaled huge; it lives in the transparent list.
 	SceneObject* seaNode = new SceneObject(seaMesh.get(), Material::Sea, Vector4(1, 1, 1, 1), true);
 	seaNode->SetTransform(Matrix4::Rotation(-90.0f, Vector3(1, 0, 0)));
 	seaNode->SetModelScale(Vector3(8000.0f, 8000.0f, 1.0f));
@@ -343,9 +339,7 @@ void Renderer::BuildEnvironmentMap() {
 	StartDebugGroup("Bake environment map");
 
 	if (!envCube) {
-		// First bake: allocate the cube map and its framebuffer ONCE. Re-specifying the texture and
-		// creating / deleting a framebuffer on every re-bake (four times a second while the clock runs)
-		// made the driver reallocate memory the GPU may still be reading; later bakes only re-render.
+		// Allocate the cube map and framebuffer once; later bakes only re-render its faces.
 		glGenTextures(1, &envCube);
 		glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
 		for (int face = 0; face < 6; ++face) {
@@ -405,8 +399,7 @@ void Renderer::DrawSky() {
 	materialBound = false;
 }
 
-// A few CesiumMan instances strolling along the road verge. When the final character model
-// arrives, only the path / fix matrix / scale in the next few lines change.
+// A few CesiumMan instances strolling along the road verge.
 void Renderer::BuildWalkers() {
 	walkerModel = std::make_unique<AnimatedModel>();
 	// Z-up model, ~1.5 units tall: scale 1.2 makes a 1.8 m person.
@@ -416,8 +409,7 @@ void Renderer::BuildWalkers() {
 		return;
 	}
 
-	// Spread along the whole road, each with a long stretch to stroll (100 m each way at 1.3 m/s
-	// is over a minute before turning), so they do not bunch up and rarely reverse on camera.
+	// Spread along the road with a long stretch each way, so they rarely reverse on camera.
 	const int   kWalkerCount = 5;
 	const float startDistance[kWalkerCount] = { 90.0f, 330.0f, 560.0f, 800.0f, 1050.0f };
 	const float duration = walkerModel->ClipDuration(0);
@@ -482,9 +474,8 @@ void Renderer::UpdateSeason(float dt) {
 	}
 }
 
-// 0 = off, 1 = on, 2 = adaptive (WGL_EXT_swap_control_tear: vsync, but a late frame tears instead of waiting
-// a whole extra refresh, so 58 fps stays 58 instead of dropping to 30). nclgl never sets the swap interval, so
-// without this the driver's own setting decides.
+// 0 = off, 1 = on, 2 = adaptive (a late frame tears instead of waiting for the next refresh).
+// nclgl sets no swap interval, so without this the driver's setting decides.
 void Renderer::ApplyVSync() {
 	typedef BOOL (WINAPI* SwapIntervalFn)(int);
 	static SwapIntervalFn swapInterval = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"));
@@ -694,9 +685,7 @@ void Renderer::BuildTraffic() {
 		node->SetBoundingRadius(3.0f);
 		root->AddChild(node);
 
-		// Cars that travel WITH the player share its lane and its exact speed, so they form a convoy
-		// that can never run into each other. Oncoming cars (other lane) all share one slower speed
-		// for the same reason; the closing speed with the player is what makes them whoosh past.
+		// Same-lane cars share the player's speed (a convoy); oncoming cars share a slower one.
 		const float convoyStart[kCount / 2] = { 90.0f, 260.0f, 700.0f, 1500.0f };
 		const bool  withPlayer = (i % 2 == 0);
 
@@ -892,10 +881,8 @@ void Renderer::EvaluateShot(int index, float t, Vector3& eye, Vector3& target, f
 
 // ---- Post-processing ------------------------------------------------------------------------
 
-// The scene is drawn into a floating-point colour target, so lights can be brighter than 1.0 and the
-// bloom pass can find them. R11G11B10F is 32 bits per pixel (as cheap to write as a normal 8-bit
-// target, half the memory traffic of RGBA16F) and still stores values above 1.
-// Bloom works at a quarter of the scene resolution: it is blurry anyway.
+// The scene renders into a float target so lights can exceed 1.0 and bloom can find them.
+// R11G11B10F stores values above 1 at 32 bits per pixel; bloom runs at quarter resolution.
 void Renderer::CreatePostTargets() {
 	DestroyPostTargets();
 
@@ -951,8 +938,7 @@ void Renderer::DestroyPostTargets() {
 	}
 }
 
-// R: render the scene at 100%, 85% or 70% of the window size and let the composite pass scale it up.
-// Costs sharpness, saves fill rate: the fallback if a slower lab GPU misses 60 fps.
+// R: render at 100%, 85% or 70% of the window size; the composite pass scales it back up.
 void Renderer::CycleRenderScale() {
 	renderScaleIndex = (renderScaleIndex + 1) % 3;
 	CreatePostTargets();
@@ -1133,10 +1119,7 @@ void Renderer::UpdateCar(float dt) {
 }
 
 void Renderer::UpdateFreeCamera(float dt) {
-	// Held left / right mouse button ramps the fly speed. Exponential, so one second of
-	// holding changes the speed by the same factor whatever it currently is; clamped, so it
-	// can neither crawl to a stop nor overshoot the island. This is the runtime version of
-	// editing "msec *= 1.0f" in nclgl/Camera.cpp and rebuilding; that file stays stock.
+	// Held left / right mouse button ramps the fly speed exponentially, clamped to a usable range.
 	auto* mouse = Window::GetMouse();
 	if (mouse->ButtonDown(MOUSE_LEFT))  { freeCameraSpeed *= std::exp(-kFlySpeedRate * dt); }
 	if (mouse->ButtonDown(MOUSE_RIGHT)) { freeCameraSpeed *= std::exp( kFlySpeedRate * dt); }
@@ -1218,7 +1201,7 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 	displayAvg = (float)average;
 	displayLow = (float)low;
 
-	// The title stays short now; everything else lives in the overlay (O).
+	// Short title; the detailed stats live in the overlay (O).
 	char title[128];
 	if (cameraMode == CameraMode::Free) {
 		std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | fly speed %.2f | O = overlay, K = keys", displayFps, freeCameraSpeed);
@@ -1240,9 +1223,8 @@ void Renderer::UploadFrameData() {
 	frameData.shadowViewProj2 = shadowProj[1] * shadowView[1];    // far cascade
 	frameData.cameraPos       = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
 	frameData.timeInfo        = Vector4(elapsedSeconds, wetness, snowCover, autumnAmount);   // y wetness, z snow cover, w autumn colour (see the terrain / tree / building shaders)
-	// x = size of one shadow-map texel in UV units, y = depth bias, z = normal offset in world units, w = on/off
-	// The far cascade's values live in shadowParams (as the single map's did); the near cascade's in shadowCascade.
-	// A near texel is smaller, so its depth bias shrinks with it (never below 40%).
+	// shadowParams: x = texel size in UV, y = far depth bias, z = far normal offset, w = on/off.
+	// shadowCascade holds the near cascade's offset and a depth bias scaled to its smaller texels.
 	const float nearBias = kShadowDepthBias * std::min(std::max(shadowTexelWorld[0] / std::max(shadowTexelWorld[1], 0.001f), 0.4f), 1.0f);
 	frameData.shadowParams    = Vector4(1.0f / kShadowMapSize, kShadowDepthBias, 1.5f * shadowTexelWorld[1], shadowsEnabled ? 1.0f : 0.0f);
 	frameData.shadowCascade   = Vector4(1.5f * shadowTexelWorld[0], nearBias, 0.0f, 0.0f);
@@ -1282,10 +1264,8 @@ void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 	}
 }
 
-// Fits two orthographic "sun cameras" around the area in front of the viewer: a wide one (cascade 1,
-// as the single shadow map used to be) and a small one (cascade 0) right around the viewer. The small one
-// has several times more shadow texels per metre, so near shadows are sharp and thin things (a walker's
-// limbs) stop shimmering.
+// Fits two orthographic sun cameras around the view: a wide far cascade and a small near one.
+// The near cascade has more texels per metre, so close shadows stay sharp.
 void Renderer::UpdateShadowMatrix() {
 	// The camera's forward vector is minus the third row of the view matrix's rotation.
 	const Vector3 forward(-viewMatrix.values[2], -viewMatrix.values[6], -viewMatrix.values[10]);

@@ -1,7 +1,6 @@
 // Vertex attribute inputs shared by every vertex shader.
-// Locations match the MeshBuffer enum in Mesh.h (0 = position ... 6 = joint indices),
-// so Shader::SetDefaultAttributes is no longer needed.
-// Attributes that a mesh does not supply are simply never fed; OpenGL allows that.
+// Locations match the MeshBuffer enum in Mesh.h (0 = position ... 6 = joint indices).
+// Attributes a mesh does not supply are simply never fed; OpenGL allows that.
 layout(location = 0) in vec3  position;
 layout(location = 1) in vec4  colour;
 layout(location = 2) in vec2  texCoord;

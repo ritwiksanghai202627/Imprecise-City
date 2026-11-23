@@ -78,8 +78,7 @@ void main(void) {
 
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
-	// Cloud shadows on every face, not just roofs: consistency is worth the extra noise evaluation,
-	// and the distance fade in CloudShadow keeps it off the far pixels where fog wins anyway.
+	// Cloud shadows on buildings; see CloudShadow for the distance fade.
 	float shadow = ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist);
 	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow) + emissive;
 

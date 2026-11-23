@@ -7,7 +7,7 @@
 namespace {
 	const float kTwoPi = 6.28318530718f;
 
-	// Same input -> same output every run, so the city is identical every time.
+	// Deterministic hash.
 	float Hash(int a, int b, int salt) {
 		unsigned int n = static_cast<unsigned int>(a) * 374761393u + static_cast<unsigned int>(b) * 668265263u
 		               + static_cast<unsigned int>(salt) * 2147483647u;
