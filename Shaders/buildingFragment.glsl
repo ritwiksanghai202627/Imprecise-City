@@ -2,6 +2,7 @@
 #include "frame.glslh"
 #include "support.glslh"
 #include "lighting.glslh"
+#include "sky.glslh"
 
 in Vertex {
 	vec3 worldPos;
@@ -68,6 +69,12 @@ void main(void) {
 	}
 
 	float shadow = ShadowFactor(IN.worldPos, N);
+
+	// Cloud shadows on roofs only. Walls are where the overdraw is (about 2 ms for the whole pass)
+	// and a vertical wall is lit mostly by the sky anyway, so the compromise is hard to see.
+	if (abs(faceNormal.y) > 0.5) {
+		shadow *= CloudShadow(IN.worldPos);
+	}
 	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow) + emissive;
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 

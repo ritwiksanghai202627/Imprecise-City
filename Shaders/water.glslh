@@ -1,33 +1,58 @@
 // Water shading shared by the sea now, and by the puddle / boat later.
 // Needs support.glslh included first.
 
-// Analytic normal for three directional wave trains. Summing slopes (the gradient) instead of
-// sampling a height field means no textures and no finite differences. Each train fades out
-// before its wavelength shrinks to a few pixels, which is what keeps the horizon from shimmering.
-vec3 WaterNormal(vec2 xz, float time, float distance) {
-	vec2 dA = normalize(vec2( 1.00,  0.35));
-	vec2 dB = normalize(vec2(-0.55,  1.00));
-	vec2 dC = normalize(vec2( 0.30, -1.00));
+// 1 while the wave is well resolved, 0 once one pixel covers a third of a wavelength.
+// The upper end is where a sine starts to alias; fading before it is what keeps the surface
+// from turning into contour rings at grazing angles.
+float WaveFade(float wavelength, float footprint) {
+	return 1.0 - smoothstep(wavelength * 0.10, wavelength * 0.33, footprint);
+}
 
-	const float kA = 6.2831853 / 19.0;   // wavelength 19 m
-	const float kB = 6.2831853 / 9.5;    // 9.5 m
-	const float kC = 6.2831853 / 4.7;    // 4.7 m
+// Analytic normal for six directional wave trains. Summing slopes (the gradient) instead of
+// sampling a height field means no textures and no finite differences.
+//
+// footprint = world-space size of one pixel on the water (max of fwidth(worldPos.xz)). Fading by
+// footprint instead of by distance handles distance *and* viewing angle in one term: looking
+// along the surface, one pixel covers many metres of water long before it is far away, and that
+// is exactly where the banding used to appear.
+//
+// Six trains spread around the compass rather than three near-parallel ones: a small number of
+// trains sums into a regular lattice whose beat lines read as concentric ripples. The wavelengths
+// are also deliberately incommensurate (no 2:1 ratios) and the warp bends the crests, so there is
+// no repeating structure left to see.
+vec3 WaterNormal(vec2 xz, float time, float footprint) {
+	vec2 d0 = normalize(vec2( 0.97,  0.26));
+	vec2 d1 = normalize(vec2( 0.21,  0.98));
+	vec2 d2 = normalize(vec2(-0.63,  0.78));
+	vec2 d3 = normalize(vec2(-0.94, -0.34));
+	vec2 d4 = normalize(vec2(-0.34, -0.94));
+	vec2 d5 = normalize(vec2( 0.68, -0.73));
 
-	float fadeA = saturate(1.0 - distance / 2800.0); fadeA *= fadeA;
-	float fadeB = saturate(1.0 - distance / 1300.0); fadeB *= fadeB;
-	float fadeC = saturate(1.0 - distance /  650.0); fadeC *= fadeC;
+	const float k0 = 6.2831853 / 23.0;
+	const float k1 = 6.2831853 / 11.3;
+	const float k2 = 6.2831853 /  6.1;
+	const float k3 = 6.2831853 /  3.7;
+	const float k4 = 6.2831853 /  2.3;
+	const float k5 = 6.2831853 /  1.4;
+
+	float warp = ValueNoise(xz * 0.03) * 4.0;
 
 	vec2 slope = vec2(0.0);
-	slope += dA * (0.110 * fadeA) * cos(dot(dA, xz) * kA - time * 2.2);   // ~6.7 m/s
-	slope += dB * (0.070 * fadeB) * cos(dot(dB, xz) * kB - time * 2.8);   // ~4.2 m/s
-	slope += dC * (0.045 * fadeC) * cos(dot(dC, xz) * kC - time * 3.4);   // ~2.5 m/s
+	slope += d0 * 0.095 * WaveFade(23.0, footprint) * cos(dot(d0, xz) * k0 - time * 2.0 + warp);
+	slope += d1 * 0.070 * WaveFade(11.3, footprint) * cos(dot(d1, xz) * k1 - time * 2.6 + warp * 1.6);
+	slope += d2 * 0.050 * WaveFade( 6.1, footprint) * cos(dot(d2, xz) * k2 - time * 3.3 + warp * 2.1);
+	slope += d3 * 0.035 * WaveFade( 3.7, footprint) * cos(dot(d3, xz) * k3 - time * 4.1 + warp * 2.7);
+	slope += d4 * 0.024 * WaveFade( 2.3, footprint) * cos(dot(d4, xz) * k4 - time * 5.2 + warp * 3.3);
+	slope += d5 * 0.016 * WaveFade( 1.4, footprint) * cos(dot(d5, xz) * k5 - time * 6.4 + warp * 3.9);
 
 	return normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
 // Sparse twinkles that ride on the wave slopes; multiplied into the tight sun highlight.
-float WaterGlitter(vec2 xz, float time) {
+// 'footprint' fades them out where a pixel is wider than a sparkle, so they stay sparkles
+// instead of becoming noise.
+float WaterGlitter(vec2 xz, float time, float footprint) {
 	vec2 p = xz * 2.3 + vec2(time * 1.7, -time * 1.1);
 	float n = ValueNoise(p) * ValueNoise(p * 2.1 + 7.3);
-	return smoothstep(0.55, 0.75, n);
+	return smoothstep(0.55, 0.75, n) * (1.0 - smoothstep(0.35, 1.20, footprint));
 }

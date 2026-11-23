@@ -47,6 +47,49 @@ vec4 CloudLayer(vec3 d) {
 	return vec4(cloud, cover * above);
 }
 
+// Cloud shadows on the ground. Project the world position along the sun onto a flat deck and
+// reuse the same value noise, so the shadows drift with the clouds. Two octaves are plenty: the
+// edges are soft anyway, and this runs for every ground pixel.
+// Cloud shadows on the ground. Project the world position along the sun onto a flat deck and
+// reuse the same value noise, so the shadows drift with the clouds. One octave: cloud shadows are
+// soft blobs, and this runs for every ground pixel (two octaves cost 2.4 ms here).
+float CloudShadow(vec3 worldPos) {
+	if (sunDir.y < 0.05) {
+		return 1.0;   // sun below the horizon: nothing casts
+	}
+
+	const float deckHeight = 620.0;
+	vec2 p = worldPos.xz + sunDir.xz * ((deckHeight - worldPos.y) / sunDir.y);
+	p = p * 0.0035 + vec2(0.006, 0.0025) * timeInfo.x;   // same drift as CloudLayer
+
+	float n = ValueNoise(p);
+	return 1.0 - 0.55 * smoothstep(0.50, 0.64, n);
+}
+
+// Stars: a hash grid on the cube-projected direction. Only at night, fading out near the horizon,
+// and drawn before the clouds so clouds pass in front of them.
+vec3 StarField(vec3 d) {
+	if (environment.x <= 0.01 || d.y <= 0.0) {
+		return vec3(0.0);
+	}
+
+	vec3 a  = abs(d);
+	vec2 uv = (a.x > a.z) ? vec2(d.z, d.y) / a.x : vec2(d.x, d.y) / a.z;
+	vec2 g  = uv * 55.0;
+	vec2 id = floor(g);
+	vec2 f  = fract(g) - 0.5;
+
+	float h = Hash21(id);
+	if (h < 0.90) {
+		return vec3(0.0);   // most cells are empty: a sparse sky
+	}
+
+	float twinkle = 0.65 + 0.35 * sin(timeInfo.x * 2.5 + h * 60.0);
+	float star    = (1.0 - smoothstep(0.0, 0.16, length(f))) * twinkle;
+	float bright  = mix(0.35, 1.0, smoothstep(0.90, 0.995, h));
+	return vec3(star * bright) * saturate(d.y * 6.0) * environment.x * 1.4;
+}
+
 // groundAmount: 1 for the environment map (reflections see a dim ground below the horizon),
 // 0 for the visible sky, where "below the horizon" must match the fogged sea, so it stays fog colour.
 vec3 SkyColour(vec3 d, float groundAmount) {
@@ -60,6 +103,10 @@ vec3 SkyColour(vec3 d, float groundAmount) {
 	// Sun: a small bright disc plus a wide soft glow.
 	float s = saturate(dot(d, sunDir.xyz));
 	col += sunColour.rgb * sunDir.w * (0.30 * pow(s, 8.0) + 10.0 * pow(s, 2000.0));
+
+	// At night the "sun" is the moon: give it a crisp disc and let the stars come out.
+	col += vec3(0.85, 0.90, 1.00) * smoothstep(0.9994, 0.9997, s) * environment.x * 1.2;
+	col += StarField(d);
 
 	// Clouds sit in front of the sun, so they composite over the disc and glow.
 	vec4 cloud = CloudLayer(d);
