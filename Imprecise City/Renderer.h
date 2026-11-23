@@ -73,7 +73,7 @@ public:
 	void RenderScene() override;
 
 private:
-	enum class CameraMode { Cinematic, Free };
+	enum class CameraMode { Drive, Free, Trailer };   // C cycles: chase the car -> free fly -> trailer (director)
 
 	// Scene graph
 	void BuildScene();
@@ -123,7 +123,7 @@ private:
 
 	// Cinematic director: a list of shots played in order. Shots watched for a few seconds count
 	// as seen; when auto mode is resumed after free flight it continues at the first unseen shot.
-	static const int kShotCount = 8;
+	static const int kShotCount = 14;
 	int    shotIndex = 0;
 	float  shotTime  = 0.0f;
 	float  shotStartCarDistance = 0.0f;   // where the car was when the shot began (some shots wait for it)
@@ -131,6 +131,10 @@ private:
 	float  shotFov   = 60.0f;
 	float  fade      = 0.0f;              // 0..1 black, drives the composite pass
 	float  startupTimer = 0.0f;           // the world holds still (screen black) for the first moments, so a recording can start cleanly
+	// Two points on the coast (found once at start-up) that the beach / sea shots are built around.
+	float  shoreAngle[2]  = { 0.9f, 3.9f };
+	float  shoreRadius[2] = { 800.0f, 800.0f };
+	void   FindShores();
 	bool   hasCity   = false;
 	Vector3 cityCentre;
 	float   cityRoadDistance = 0.0f;
@@ -144,10 +148,12 @@ private:
 	std::unique_ptr<Shader> brightShader, blurShader, compositeShader;
 	bool   bloomEnabled    = true;   // B toggles
 	bool   vignetteEnabled = true;   // V toggles (vignette + colour grade)
+	bool   lensEnabled     = true;   // L toggles (chromatic aberration + film grain, in the composite pass)
+	bool   verboseTitle    = false;  // I toggles the detailed title (GPU ms per pass)
 
 	// Camera
 	Camera     camera;               // nclgl free-fly camera
-	CameraMode cameraMode = CameraMode::Cinematic;
+	CameraMode cameraMode = CameraMode::Drive;
 	float      freeCameraSpeed = 1.0f;   // 1 = nclgl stock speed; left/right mouse button change it at runtime
 	Vector3    eyePosition;
 	Vector3    lookTarget;

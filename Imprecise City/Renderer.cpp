@@ -22,8 +22,8 @@ namespace {
 	Vector3 Mix(const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; }
 
 	// Cinematic shots: how long each plays (seconds). EvaluateShot has the matching camera moves.
-	const float kShotLength[8] = { 12.0f, 12.0f, 12.0f, 9.0f, 12.0f, 7.0f, 8.0f, 8.0f };
-	const bool  kShotNeedsCity[8] = { false, false, true, false, true, true, false, false };
+	const float kShotLength[14] = { 12.0f, 12.0f, 12.0f, 9.0f, 12.0f, 7.0f, 8.0f, 8.0f, 10.0f, 9.0f, 11.0f, 7.0f, 8.0f, 9.0f };   // 134 s in total
+	const bool  kShotNeedsCity[14] = { false, false, true, false, true, true, false, false, false, false, true, false, false, false };
 
 	const float kStartDelay = 2.0f;                        // seconds of black before anything moves
 	const float kRenderScales[3] = { 1.0f, 0.85f, 0.7f };  // R key: internal resolution of the scene
@@ -93,6 +93,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 		plateau.inner = CityConst::kPlateauInner; plateau.outer = CityConst::kPlateauOuter;
 	}
 	terrain = std::make_unique<Terrain>(*road, plateau);
+	FindShores();
 	roadSegments = road->BuildRibbonSegments(5.0f, 0.15f, 8.0f, 48);   // 48 samples = 192 m per piece, so the road can be culled
 
 	// Placeholder car body: a smooth rounded box (so reflections look right), 2 x 1.1 x 4.4 m.
@@ -723,6 +724,48 @@ void Renderer::EvaluateShot(int index, float t, Vector3& eye, Vector3& target, f
 		fov    = 70.0f;
 		break;
 	}
+	case 8: {   // Shoreline: low sweep along the beach, foam and surf in the foreground
+		const float a = shoreAngle[0], R = shoreRadius[0];
+		const Vector3 P(std::cos(a) * R, 0.0f, std::sin(a) * R), out(std::cos(a), 0.0f, std::sin(a)), tang(-std::sin(a), 0.0f, std::cos(a));
+		eye    = P + out * 26.0f + tang * (-25.0f + t * 5.0f) + Vector3(0.0f, 3.5f, 0.0f);
+		target = P - out * 8.0f + tang * (15.0f + t * 5.0f) + Vector3(0.0f, 2.5f, 0.0f);
+		break;
+	}
+	case 9: {   // From the sea: a slow rise out of the water towards the island
+		const float a = shoreAngle[1], R = shoreRadius[1];
+		const Vector3 out(std::cos(a), 0.0f, std::sin(a));
+		eye    = out * (R + 190.0f - t * 6.0f) + Vector3(0.0f, MixF(3.0f, 45.0f, s), 0.0f);
+		target = out * (R - 250.0f) + Vector3(0.0f, 30.0f, 0.0f);
+		fov    = 55.0f;
+		break;
+	}
+	case 10: {  // Rooftops: a slow orbit around the city at tower height
+		const float a = 0.5f + t * 0.28f;
+		eye    = cityCentre + Vector3(std::cos(a) * 150.0f, 75.0f, std::sin(a) * 150.0f);
+		target = cityCentre + Vector3(0.0f, 20.0f, 0.0f);
+		eye.y  = std::max(eye.y, terrain->HeightAt(eye.x, eye.z) + 6.0f);
+		fov    = 55.0f;
+		break;
+	}
+	case 11: {  // Low chase: wheel height, wide lens, the road rushes past
+		eye    = carPos - fwd * 7.0f + right * 1.2f + Vector3(0.0f, 0.7f, 0.0f);
+		target = carPos + fwd * 12.0f + Vector3(0.0f, 0.8f, 0.0f);
+		fov    = 78.0f;
+		break;
+	}
+	case 12: {  // Side tracking: alongside the car, drifting slowly forward
+		eye    = carPos + right * 7.5f + fwd * (-3.0f + t * 0.6f) + Vector3(0.0f, 1.6f, 0.0f);
+		target = carPos + Vector3(0.0f, 1.0f, 0.0f);
+		fov    = 50.0f;
+		break;
+	}
+	case 13: {  // Helicopter: high behind the car, swinging out to the side
+		const float a = MixF(0.0f, 1.1f, s);
+		eye    = carPos - fwd * (34.0f * std::cos(a)) + right * (34.0f * std::sin(a)) + Vector3(0.0f, 28.0f, 0.0f);
+		target = carPos + fwd * 18.0f + Vector3(0.0f, 1.0f, 0.0f);
+		eye.y  = std::max(eye.y, terrain->HeightAt(eye.x, eye.z) + 5.0f);
+		break;
+	}
 	default: {  // Drone: circling the car
 		const float a = t * 0.55f;
 		eye    = carPos + Vector3(std::cos(a) * 16.0f, 7.0f + 2.0f * std::sin(t), std::sin(a) * 16.0f);
@@ -843,6 +886,8 @@ void Renderer::RenderPostProcessing() {
 	glUniform1f(glGetUniformLocation(activeProgram, "bloomAmount"), bloomEnabled ? 0.7f : 0.0f);
 	glUniform1f(glGetUniformLocation(activeProgram, "vignetteAmount"), vignetteEnabled ? 0.45f : 0.0f);
 	glUniform1f(glGetUniformLocation(activeProgram, "fade"), fade);
+	glUniform1f(glGetUniformLocation(activeProgram, "lensAmount"), lensEnabled ? 1.0f : 0.0f);
+	glUniform1f(glGetUniformLocation(activeProgram, "grainSeed"), std::fmod(elapsedSeconds, 10.0f));
 	seaMesh->Draw();
 
 	glActiveTexture(GL_TEXTURE0);
@@ -903,21 +948,28 @@ void Renderer::UpdateScene(float /*dt*/) {
 	if (keys->KeyTriggered(KEYBOARD_B)) { bloomEnabled = !bloomEnabled; }
 	if (keys->KeyTriggered(KEYBOARD_V)) { vignetteEnabled = !vignetteEnabled; }
 	if (keys->KeyTriggered(KEYBOARD_R)) { CycleRenderScale(); }
+	if (keys->KeyTriggered(KEYBOARD_L)) { lensEnabled = !lensEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_I)) { verboseTitle = !verboseTitle; }
 	if (timeAuto) {
 		timeOfDay += dt / 6.0f;   // 6 real seconds per hour: a whole day in 144 seconds
 		if (timeOfDay >= 24.0f) { timeOfDay -= 24.0f; }
 	}
 
 	UpdateCar(dt);   // the world keeps running when the camera is released
-	if (cameraMode == CameraMode::Cinematic) {
-		UpdateCinematicCamera(dt);
-		if (startupTimer < kStartDelay) { fade = 1.0f; }
+	if (cameraMode == CameraMode::Trailer) {
+		UpdateCinematicCamera(dt);   // the shot director
+	}
+	else if (cameraMode == CameraMode::Drive) {
+		fade    = 0.0f;
+		EvaluateShot(0, 0.0f, eyePosition, lookTarget, shotFov);   // shot 0 is the chase camera
+		viewMatrix = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
 	}
 	else {
 		fade    = 0.0f;
 		shotFov = 60.0f;
 		UpdateFreeCamera(dt);
 	}
+	if (startupTimer < kStartDelay) { fade = 1.0f; }   // black while the recording starts
 
 	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, shotFov);
 
@@ -980,8 +1032,9 @@ void Renderer::UpdateFreeCamera(float dt) {
 }
 
 void Renderer::SwitchCameraMode() {
-	if (cameraMode == CameraMode::Cinematic) {
-		// Hand the current cinematic pose to the free camera so there is no jump.
+	const CameraMode previous = cameraMode;
+	if (previous == CameraMode::Drive) {
+		// Hand the current chase pose to the free camera so there is no jump.
 		Vector3 f = lookTarget - eyePosition;
 		const float len = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
 		f = f * (1.0f / len);
@@ -990,10 +1043,31 @@ void Renderer::SwitchCameraMode() {
 		camera.SetPitch(PitchFromDirection(f));
 		cameraMode = CameraMode::Free;
 	}
-	else {
-		cameraMode = CameraMode::Cinematic;
-		ResumeDirector();   // continue with a shot the viewer has not seen yet
+	else if (previous == CameraMode::Free) {
+		cameraMode = CameraMode::Trailer;
+		ResumeDirector();        // continue with a shot the viewer has not seen yet
 		cullingFrozen = false;   // a frozen frustum only makes sense while flying around
+	}
+	else {
+		cameraMode = CameraMode::Drive;
+		shotFov = 60.0f;
+	}
+	std::cout << "Camera: " << (cameraMode == CameraMode::Drive ? "drive" : cameraMode == CameraMode::Free ? "free" : "trailer") << "\n";
+}
+
+// Walks outwards-in along two rays from the island centre and remembers where the land first rises
+// above the waterline; the beach and sea shots are built around these two points.
+void Renderer::FindShores() {
+	const float angles[2] = { 0.9f, 3.9f };
+	for (int k = 0; k < 2; ++k) {
+		shoreAngle[k]  = angles[k];
+		shoreRadius[k] = 800.0f;
+		for (float r = 1000.0f; r > 50.0f; r -= 4.0f) {
+			if (terrain->HeightAt(std::cos(angles[k]) * r, std::sin(angles[k]) * r) > 1.5f) {
+				shoreRadius[k] = r;
+				break;
+			}
+		}
 	}
 }
 
@@ -1014,20 +1088,28 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 
 	const double average = fpsFrames ? fpsFrames / fpsTotalTime : 0.0;
 	const double low     = worstFrame > 0.0f ? 1.0 / worstFrame : 0.0;
-	const double high    = bestFrame < 1e8f ? 1.0 / bestFrame : 0.0;
 
+	const char* camName = cameraMode == CameraMode::Drive ? "drive" : cameraMode == CameraMode::Free ? "free" : "trailer";
+	const int   scale   = static_cast<int>(kRenderScales[renderScaleIndex] * 100.0f + 0.5f);
+
+	// Short by default (the title bar is small); I shows the per-pass GPU times as well.
 	char title[420];
-	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f post %.2f | bloom %s vignette %s | frustum %s | shadows %s | cam %s | fly %.2fx",
-		titleFrames / titleTimer, average, low, high,
-		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
-		static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
-		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent], gpuMs[PassPost],
-		bloomEnabled ? "on" : "off", vignetteEnabled ? "on" : "off",
-		cullingFrozen ? "FROZEN" : "camera",
-		shadowsEnabled ? "on" : "off",
-		cameraMode == CameraMode::Cinematic ? "cinematic" : "free",
-		freeCameraSpeed);
+	if (verboseTitle) {
+		std::snprintf(title, sizeof(title),
+			"Imprecise City | %.0f fps (avg %.0f, low %.0f) | %02d:%02d | scale %d%% | cam %s | draws %u (+%u) tris %u | GPU ms: sh %.1f op %.1f sky %.1f tr %.1f post %.1f",
+			titleFrames / titleTimer, average, low,
+			static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
+			scale, camName, stats.drawCalls, stats.shadowDraws, stats.triangles,
+			gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent], gpuMs[PassPost]);
+	}
+	else {
+		std::snprintf(title, sizeof(title),
+			"Imprecise City | %.0f fps (avg %.0f, low %.0f) | %02d:%02d | scale %d%% | cam %s | bloom %s vig %s lens %s shadows %s | I = details",
+			titleFrames / titleTimer, average, low,
+			static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
+			scale, camName,
+			bloomEnabled ? "on" : "off", vignetteEnabled ? "on" : "off", lensEnabled ? "on" : "off", shadowsEnabled ? "on" : "off");
+	}
 	if (HWND window = GetActiveWindow()) {
 		SetWindowTextA(window, title);
 	}

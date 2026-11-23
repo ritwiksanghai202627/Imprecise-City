@@ -118,6 +118,7 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 	// Only near the camera (beyond ~1.8 km the detail is sub-pixel and fog dominates anyway).
 	if (dist < 1800.0) {
 		float depth = WaterDepth(worldPos.xz);
+		if (depth < 9.0) {   // open water skips all the noise below: only the shallows pay for foam
 		float day   = saturate(sunDir.w);   // 1 by day, small by moonlight: keeps the shallows from glowing at night
 
 		float shallow = 1.0 - smoothstep(0.4, 9.0, depth);
@@ -137,6 +138,7 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 
 		vec3 foamColour = vec3(0.93, 0.96, 0.98) * (fogColour.rgb * 0.45 + sunColour.rgb * sunDir.w * 0.7);
 		colour = lerp(colour, foamColour, foam * 0.85);
+		}
 	}
 
 	// Both the quad and the sky-painted sea use the same thinner haze, so the join is seamless and
