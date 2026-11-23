@@ -2,6 +2,7 @@
 #include "RoadPath.h"
 #include "Terrain.h"
 #include "ProceduralMesh.h"
+#include "Outskirts.h"
 
 #include <algorithm>
 #include <cmath>
@@ -110,6 +111,8 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	skinnedShadowShader = std::make_unique<Shader>("skinnedShadowVertex.glsl", "shadowFragment.glsl");
 	buildingShader       = std::make_unique<Shader>("buildingVertex.glsl", "buildingFragment.glsl");
 	buildingShadowShader = std::make_unique<Shader>("buildingShadowVertex.glsl", "shadowFragment.glsl");
+	treeShader           = std::make_unique<Shader>("treeVertex.glsl", "treeFragment.glsl");
+	treeShadowShader     = std::make_unique<Shader>("treeShadowVertex.glsl", "shadowFragment.glsl");
 	brightShader    = std::make_unique<Shader>("postVertex.glsl", "brightFragment.glsl");
 	blurShader      = std::make_unique<Shader>("postVertex.glsl", "blurFragment.glsl");
 	compositeShader = std::make_unique<Shader>("postVertex.glsl", "compositeFragment.glsl");
@@ -131,6 +134,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() || !shadowShader->LoadSuccess() ||
 	    !carShader->LoadSuccess() || !skinnedShader->LoadSuccess() || !skinnedShadowShader->LoadSuccess() ||
 	    !buildingShader->LoadSuccess() || !buildingShadowShader->LoadSuccess() ||
+	    !treeShader->LoadSuccess() || !treeShadowShader->LoadSuccess() ||
 	    !brightShader->LoadSuccess() || !blurShader->LoadSuccess() || !compositeShader->LoadSuccess() ||
 	    !skyShader->LoadSuccess() || !bakeSkyShader->LoadSuccess() ||
 	    !grassTexture || !sandTexture || !rockTexture) {
@@ -152,6 +156,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 		carDistance = cityRoadDistance - 450.0f;
 		carDistance -= std::floor(carDistance / length) * length;
 	}
+	BuildOutskirts();   // trees and the village (needs the terrain, the road and the city site)
 	BuildTraffic();
 	BuildWalkers();
 	CreateShadowMap();
@@ -544,9 +549,19 @@ void Renderer::BuildCity(const Vector3& centre, float roadDistance) {
 	city->Generate(*road, centre, roadDistance);
 	unitBox.reset(BuildUnitBox());
 
+	AddInstancedPatches(city->GetInstances(), unitBox.get(), Material::Building);
+}
+
+// Sorts instances into 192 m grid cells and makes one scene node ("patch") per cell: its own
+// instance buffer, one instanced draw, and a bounding sphere, so patches outside the view (or the
+// sun's shadow box) are culled exactly like terrain chunks. Used for buildings, trees and roofs.
+void Renderer::AddInstancedPatches(const std::vector<CityInstance>& all, ProceduralMesh* mesh, Material material) {
+	if (all.empty()) {
+		return;
+	}
 	const float cell = 192.0f;
 	std::map<std::pair<int, int>, std::vector<CityInstance>> buckets;
-	for (const CityInstance& inst : city->GetInstances()) {
+	for (const CityInstance& inst : all) {
 		const int ix = static_cast<int>(std::floor(inst.px / cell));
 		const int iz = static_cast<int>(std::floor(inst.pz / cell));
 		buckets[std::make_pair(ix, iz)].push_back(inst);
@@ -574,13 +589,31 @@ void Renderer::BuildCity(const Vector3& centre, float roadDistance) {
 		glBufferData(GL_SHADER_STORAGE_BUFFER, list.size() * sizeof(CityInstance), list.data(), GL_STATIC_DRAW);
 		citySSBOs.push_back(buffer);
 
-		CityDistrict* district = new CityDistrict(unitBox.get(), buffer, static_cast<int>(list.size()));
+		CityDistrict* district = new CityDistrict(mesh, buffer, static_cast<int>(list.size()), material);
 		district->SetTransform(Matrix4::Translation(average));   // only used for culling and sorting; instances hold world positions
 		district->SetBoundingRadius(radius);
 		root->AddChild(district);
 	}
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-	std::cout << "City: " << buckets.size() << " districts\n";
+	std::cout << "Patches: " << all.size() << " instances in " << buckets.size() << " patches\n";
+}
+
+// Trees and the village. Outskirts.h makes the instance lists; each list becomes culled patches.
+void Renderer::BuildOutskirts() {
+	std::vector<CityInstance> pines, broadleaf, houses, roofs;
+	Outskirts::Generate(*road, *terrain, hasCity, cityCentre, pines, broadleaf, houses, roofs);
+
+	if (!unitBox) {
+		unitBox.reset(BuildUnitBox());   // normally made by BuildCity; the village needs it even without a city
+	}
+	pineMesh.reset(Outskirts::BuildPine());
+	broadleafMesh.reset(Outskirts::BuildBroadleaf());
+	roofMesh.reset(Outskirts::BuildRoof());
+
+	AddInstancedPatches(pines,     pineMesh.get(),     Material::Tree);
+	AddInstancedPatches(broadleaf, broadleafMesh.get(), Material::Tree);
+	AddInstancedPatches(houses,    unitBox.get(),      Material::Building);
+	AddInstancedPatches(roofs,     roofMesh.get(),     Material::Building);
 }
 
 // A handful of other cars driving the loop: some with the road's direction (right-hand lane),
@@ -1116,8 +1149,13 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 	displayLow = (float)low;
 
 	// The title stays short now; everything else lives in the overlay (O).
-	char title[96];
-	std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | O = overlay, K = keys", displayFps);
+	char title[128];
+	if (cameraMode == CameraMode::Free) {
+		std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | fly speed %.2f | O = overlay, K = keys", displayFps, freeCameraSpeed);
+	}
+	else {
+		std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | O = overlay, K = keys", displayFps);
+	}
 	if (HWND window = GetActiveWindow()) {
 		SetWindowTextA(window, title);
 	}
@@ -1236,6 +1274,7 @@ void Renderer::RenderShadowPass() {
 	const GLint shadowModelLoc = glGetUniformLocation(activeProgram, "modelMatrix");
 	bool anySkinned = false;
 	bool anyBuildings = false;
+	bool anyTrees = false;
 	for (SceneObject* node : shadowCasterList) {
 		if (node->GetMaterial() == Material::Skinned) {
 			anySkinned = true;   // drawn below with the skinning shader
@@ -1243,6 +1282,10 @@ void Renderer::RenderShadowPass() {
 		}
 		if (node->GetMaterial() == Material::Building) {
 			anyBuildings = true;   // drawn below with the instancing shader
+			continue;
+		}
+		if (node->GetMaterial() == Material::Tree) {
+			anyTrees = true;   // drawn below with the tree shadow shader (the shadow sways too)
 			continue;
 		}
 		const Matrix4 model = node->GetWorldTransform() * Matrix4::Scale(node->GetModelScale());
@@ -1256,6 +1299,16 @@ void Renderer::RenderShadowPass() {
 		for (SceneObject* node : shadowCasterList) {
 			if (node->GetMaterial() == Material::Building) {
 				node->Draw(*this);   // binds the district's instance buffer and draws all its boxes at once
+				++stats.shadowDraws;
+			}
+		}
+	}
+
+	if (anyTrees) {
+		Use(*treeShadowShader);
+		for (SceneObject* node : shadowCasterList) {
+			if (node->GetMaterial() == Material::Tree) {
+				node->Draw(*this);   // binds the patch's instance buffer and draws all its trees at once
 				++stats.shadowDraws;
 			}
 		}
@@ -1326,6 +1379,7 @@ void Renderer::BindMaterial(Material material) {
 		case Material::Skinned: Use(*skinnedShader); break;
 		case Material::Sea:  Use(*seaShader);  break;
 		case Material::Building: Use(*buildingShader); break;
+		case Material::Tree: Use(*treeShader); break;
 	}
 
 	// Pull the road slightly toward the camera so it never z-fights the terrain under it.
@@ -1386,9 +1440,9 @@ void Renderer::DrawNode(SceneObject* node) {
 	node->Draw(*this);
 
 	++stats.drawCalls;
-	if (node->GetMaterial() == Material::Building) {
-		// One draw call, many boxes: count them all.
-		stats.triangles += node->GetMesh()->GetTriCount() * static_cast<CityDistrict*>(node)->InstanceCount();   // valid: only CityDistrict uses Material::Building
+	if (node->GetMaterial() == Material::Building || node->GetMaterial() == Material::Tree) {
+		// One draw call, many instances: count them all.
+		stats.triangles += node->GetMesh()->GetTriCount() * static_cast<CityDistrict*>(node)->InstanceCount();   // valid: only CityDistrict uses Material::Building / Tree
 	}
 	else {
 		stats.triangles += node->GetMesh()->GetTriCount();
@@ -1498,6 +1552,10 @@ void Renderer::DrawOverlay() {
 	lines.push_back({ buf, displayFps >= 59.0f ? green : displayFps >= 45.0f ? amber : red });
 	std::snprintf(buf, sizeof(buf), "Time %02d:%02d  cam %s  scale %d%%", static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f), camName, scale);
 	lines.push_back({ buf, white });
+	if (cameraMode == CameraMode::Free) {
+		std::snprintf(buf, sizeof(buf), "fly speed x%.2f  (hold left / right mouse button: slower / faster)", freeCameraSpeed);
+		lines.push_back({ buf, white });
+	}
 	std::snprintf(buf, sizeof(buf), "bloom %s  vignette %s  lens %s  shadows %s", bloomEnabled ? on : off, vignetteEnabled ? on : off, lensEnabled ? on : off, shadowsEnabled ? on : off);
 	lines.push_back({ buf, white });
 	std::snprintf(buf, sizeof(buf), "draws %u (+%u shadow)  tris %u  nodes %u/%u", stats.drawCalls, stats.shadowDraws, stats.triangles, stats.nodesDrawn, stats.nodesTotal);

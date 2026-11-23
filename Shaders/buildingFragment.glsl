@@ -25,7 +25,11 @@ void main(void) {
 	vec3 albedo   = vec3(0.5);
 	vec3 emissive = vec3(0.0);
 
-	if (style > 10.5) {
+	if (style > 11.5) {
+		// Village roof (a gable prism, see Outskirts.h): terracotta or slate, chosen by the seed in the fraction.
+		albedo = lerp(vec3(0.46, 0.21, 0.15), vec3(0.22, 0.24, 0.28), step(0.5, fract(style)));
+	}
+	else if (style > 10.5) {
 		// Lamp head: glows when the street lights are on.
 		albedo   = vec3(0.7);
 		emissive = vec3(1.0, 0.78, 0.45) * 2.5 * smoothstep(0.2, 0.5, night);
@@ -34,9 +38,13 @@ void main(void) {
 		albedo = vec3(0.22, 0.23, 0.25);   // lamp pole
 	}
 	else {
-		float seed = style;
+		bool  house = style >= 3.0;   // village house: 3 + seed (city buildings use plain 0..1 seeds)
+		float seed  = house ? fract(style) : style;
 		vec3  wall = lerp(vec3(0.58, 0.56, 0.52), vec3(0.34, 0.36, 0.42), fract(seed * 7.0));
 		wall       = lerp(wall, vec3(0.50, 0.27, 0.21), step(0.82, fract(seed * 13.0)));   // some brick buildings
+		if (house) {
+			wall = lerp(vec3(0.80, 0.74, 0.62), vec3(0.70, 0.76, 0.80), step(0.5, fract(seed * 5.0)));   // cream or pale blue plaster
+		}
 
 		if (abs(faceNormal.y) > 0.5) {
 			albedo = wall * 0.55;   // roof
@@ -47,7 +55,7 @@ void main(void) {
 			vec2 cellSize = vec2(3.2, 3.6);
 			vec2 id       = floor(fc / cellSize);
 			vec2 f        = fract(fc / cellSize);
-			bool shopFront = id.y < 1.0;   // ground floor: big glass
+			bool shopFront = id.y < 1.0 && !house;   // ground floor: big glass
 
 			float glass = step(0.18, f.x) * step(f.x, 0.82)
 			            * step(shopFront ? 0.10 : 0.22, f.y) * step(f.y, shopFront ? 0.85 : 0.78);

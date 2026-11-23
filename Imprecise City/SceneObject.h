@@ -7,7 +7,7 @@
 // Order matters for early-z: big occluders (buildings) are drawn before the ground, so the
 // expensive terrain shader never runs for pixels a building has already covered. Terrain goes
 // last because it is the largest surface and the thing most often hidden.
-enum class Material { Building, Road, Lit, Car, Skinned, Terrain, Sea };
+enum class Material { Building, Tree, Road, Lit, Car, Skinned, Terrain, Sea };
 
 /*
 A SceneNode that knows how it should be drawn. nclgl's SceneNode only holds a mesh, a

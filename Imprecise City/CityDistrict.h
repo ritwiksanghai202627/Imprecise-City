@@ -13,8 +13,10 @@ where instance.glslh expects it.
 */
 class CityDistrict : public SceneObject {
 public:
-	CityDistrict(ProceduralMesh* unitBox, GLuint instanceBuffer, int instanceCount)
-		: SceneObject(unitBox, Material::Building), box(unitBox), buffer(instanceBuffer), count(instanceCount) {}
+	// 'mesh' is drawn 'instanceCount' times. Buildings use the unit box; trees and roofs pass their own
+	// mesh and material (Material::Tree for trees, Material::Building for roofs).
+	CityDistrict(ProceduralMesh* mesh, GLuint instanceBuffer, int instanceCount, Material material = Material::Building)
+		: SceneObject(mesh, material), box(mesh), buffer(instanceBuffer), count(instanceCount) {}
 
 	void Draw(const OGLRenderer& /*renderer*/) override {
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer);

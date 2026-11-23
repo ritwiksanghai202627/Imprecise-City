@@ -68,5 +68,8 @@
     <ClInclude Include="DebugOverlay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Outskirts.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

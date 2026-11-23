@@ -1,0 +1,13 @@
+// Wind for vegetation: a gust that travels across the island plus a little fast flutter.
+// Needs frame.glslh (timeInfo.x = seconds). Shared by the tree and tree-shadow vertex shaders,
+// so the shadow sways with the tree.
+//   bend   0 at the root .. 1 at the top of the plant (it moves as the square, so the base stays put)
+//   height the plant's height in metres (taller plants move further)
+// Returns the world-space displacement in metres.
+vec3 WindOffset(vec3 worldPos, float bend, float height) {
+	float t       = timeInfo.x;
+	float gust    = sin(t * 0.9 + dot(worldPos.xz, vec2(0.011, 0.007))) * 0.6 + 0.4;   // a wave moving over the land
+	float flutter = sin(t * 2.3 + worldPos.x * 0.7 + worldPos.z * 0.5) * 0.15;
+	float amount  = (gust + flutter) * bend * bend * height * 0.05;
+	return vec3(amount * 0.8, 0.0, amount * 0.6);
+}

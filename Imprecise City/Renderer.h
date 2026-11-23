@@ -116,6 +116,8 @@ private:
 	void   ApplyTimeOfDay();      // sun, moon, sky and fog colours for 'timeOfDay'
 	void   UpdateLights();        // street lamps near the camera + car headlights -> frame UBO
 	void   BuildCity(const Vector3& centre, float roadDistance);
+	void   BuildOutskirts();      // trees + village (Outskirts.h)
+	void   AddInstancedPatches(const std::vector<CityInstance>& all, ProceduralMesh* mesh, Material material);   // groups instances into culled 192 m patches
 	void   BuildTraffic();
 	void   UpdateTraffic(float dt);
 	void   UpdateWindowTitle(float dt);
@@ -173,6 +175,7 @@ private:
 	std::unique_ptr<Mesh>     carMesh;
 	std::unique_ptr<City>            city;
 	std::unique_ptr<ProceduralMesh>  unitBox;       // shared by every building / lamp instance
+	std::unique_ptr<ProceduralMesh>  pineMesh, broadleafMesh, roofMesh;   // trees and village roofs (Outskirts.h)
 	std::vector<GLuint>              citySSBOs;     // one instance buffer per district
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
@@ -246,6 +249,7 @@ private:
 	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
 	std::unique_ptr<Shader> buildingShader, buildingShadowShader;
+	std::unique_ptr<Shader> treeShader, treeShadowShader;
 	std::unique_ptr<Shader> carShader, skinnedShader, skinnedShadowShader, skyShader, bakeSkyShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
 	GLuint whiteTexture = 0;           // 1x1 white, bound when a model has no texture
