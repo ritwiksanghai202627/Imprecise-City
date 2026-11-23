@@ -104,9 +104,12 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 
 			// Tall in the middle, low at the edge, with per-building variation.
 			const float centreHeight = 20.0f + 45.0f * (1.0f - Smoothstep(0.0f, CityConst::kCityRadius, r));
-			const float height = std::max(10.0f, centreHeight * (0.55f + 0.9f * Hash(ia, ib, 3)));
+			// Whole storeys only (3.6 m each, matching the window grid in buildingFragment.glsl), so the
+			// top row of windows is never cut short into non-square slits.
+			const float wanted = std::max(10.0f, centreHeight * (0.55f + 0.9f * Hash(ia, ib, 3)));
+			const float height = std::max(3.0f, std::floor(wanted / 3.6f + 0.5f)) * 3.6f;
 
-			instances.push_back({ px, centre.y - 0.5f, pz, yaw, fx, height + 0.5f, fz, Hash(ia, ib, 4) });
+			instances.push_back({ px, centre.y - 0.5f, pz, yaw, fx, height, fz, Hash(ia, ib, 4) });
 		}
 	}
 
@@ -130,10 +133,12 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 
 		instances.push_back({ x, p.y - 0.5f, z, lampYaw, 0.3f, poleHeight, 0.3f, 10.0f });
 
-		// The head hangs over the road, so it sits 1 m towards the centre line.
-		const float hx = x - right.x * side * (1.0f / std::fabs(side)) * 1.0f;
-		const float hz = z - right.z * side * (1.0f / std::fabs(side)) * 1.0f;
-		instances.push_back({ hx, p.y - 0.5f + poleHeight, hz, lampYaw, 1.6f, 0.3f, 0.7f, 11.0f });
+		// The head is an arm reaching over the road: 1.3 m across, centred 0.55 m towards the centre line,
+		// so its far end overlaps the pole (no gap between post and lamp).
+		const float armOffset = 0.55f;
+		const float hx = x - right.x * side * (armOffset / std::fabs(side));
+		const float hz = z - right.z * side * (armOffset / std::fabs(side));
+		instances.push_back({ hx, p.y - 0.5f + poleHeight - 0.3f, hz, lampYaw, 0.7f, 0.3f, 1.3f, 11.0f });
 		lampHeads.push_back(Vector3(hx, p.y - 0.5f + poleHeight - 0.2f, hz));
 	}
 

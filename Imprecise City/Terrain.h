@@ -42,6 +42,8 @@ public:
 	// Height of the (carved) terrain at a world position; -30 outside the grid.
 	float HeightAt(float x, float z) const;
 
+	float GetHalfExtent() const { return halfExtent; }   // the grid spans -halfExtent .. +halfExtent on x and z
+
 	// The natural island before any carving. The road samples this to choose its own height.
 	static float IslandHeight(float x, float z);
 

@@ -1,6 +1,16 @@
 // Water shading shared by the sea now, and by the puddle / boat later.
 // Needs support.glslh included first.
 
+// Island height map (terrain height in metres, 512 x 512 over x,z in [-SHORE_EXTENT, +SHORE_EXTENT]),
+// bound by the renderer to unit 6 for the whole main pass. Water depth = minus the terrain height.
+layout(binding = 6) uniform sampler2D shoreMap;
+const float SHORE_EXTENT = 1024.0;   // must match Terrain::GetHalfExtent()
+
+// > 0 under water, about 0 at the shoreline. Far outside the island the clamped border reads as deep.
+float WaterDepth(vec2 xz) {
+	return -texture(shoreMap, xz / (2.0 * SHORE_EXTENT) + 0.5).r;
+}
+
 // 1 while the wave is well resolved, 0 once one pixel covers about half a wavelength.
 // Nyquist says a sine is unresolved at half a wavelength, so fading a little before that is
 // enough. The previous 0.10-0.33 window was far too conservative: at eye level it flattened the
@@ -102,6 +112,31 @@ vec3 ShadeWater(vec3 worldPos, vec3 V, float footprint, float dist, samplerCube 
 		float glitter = WaterGlitter(worldPos.xz, timeInfo.x, footprint);
 		float glint   = pow(sun, 120.0) * 0.25 + pow(sun, 1200.0) * 4.0 * (0.35 + 0.9 * glitter);
 		colour += sunColour.rgb * sunDir.w * glint;
+	}
+
+	// Shoreline: turquoise shallows and a wide band of foam on the water side of the beach.
+	// Only near the camera (beyond ~1.8 km the detail is sub-pixel and fog dominates anyway).
+	if (dist < 1800.0) {
+		float depth = WaterDepth(worldPos.xz);
+		float day   = saturate(sunDir.w);   // 1 by day, small by moonlight: keeps the shallows from glowing at night
+
+		float shallow = 1.0 - smoothstep(0.4, 9.0, depth);
+		colour = lerp(colour, vec3(0.10, 0.42, 0.46) * (0.25 + 0.75 * day), shallow * 0.5 * (1.0 - fresnel));
+
+		// Foam bands travel towards the beach; the wobble and the lace noise break them up.
+		float warp  = ValueNoise(worldPos.xz * 0.08) * 6.0;
+		float wave  = 0.5 + 0.5 * sin(depth * 2.2 - timeInfo.x * 1.3 + warp);
+		float band  = 1.0 - smoothstep(0.0, 3.4, depth + (wave - 0.5) * 1.0);
+		float edge  = 1.0 - smoothstep(0.0, 0.7, depth);   // a solid line right at the waterline
+		float lace  = ValueNoise(worldPos.xz * 1.3 + vec2(timeInfo.x * 0.15, 0.0))
+		            * ValueNoise(worldPos.xz * 3.1 - vec2(0.0, timeInfo.x * 0.10));
+		// The lace fades once a pixel is wider than it (no shimmer); the thin waterline survives much further.
+		float foam  = band * smoothstep(0.10, 0.36, lace + band * 0.35) * (1.0 - smoothstep(0.5, 2.5, footprint))
+		            + edge * 0.8 * (1.0 - smoothstep(2.0, 8.0, footprint));
+		foam = saturate(foam);
+
+		vec3 foamColour = vec3(0.93, 0.96, 0.98) * (fogColour.rgb * 0.45 + sunColour.rgb * sunDir.w * 0.7);
+		colour = lerp(colour, foamColour, foam * 0.85);
 	}
 
 	// Both the quad and the sky-painted sea use the same thinner haze, so the join is seamless and

@@ -43,7 +43,7 @@ void main(void) {
 	// reach this pixel are known without any light list. Every lamp along the road therefore lights
 	// the road, near or far: no lights popping on as you approach.
 	const float LAMP_SPACING = 48.0;   // must match City::Generate
-	const float LAMP_SIDE    = 6.0;    // lamp head's distance from the centre line
+	const float LAMP_SIDE    = 6.45;   // lamp head's distance from the centre line (pole at 7.0, arm 0.55 inwards)
 	const float LAMP_HEIGHT  = 7.2;    // lamp head above the road surface
 	float lampsOn   = saturate((environment.x - 0.2) * 3.0);
 	vec3  lampLight = vec3(0.0);

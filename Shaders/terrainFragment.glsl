@@ -41,7 +41,6 @@ void main(void) {
 	// undefined where neighbouring pixels take different branches (visible as seams).
 	vec2 dx = dFdx(IN.texCoord);
 	vec2 dy = dFdy(IN.texCoord);
-	vec2 fw = fwidth(xz);
 
 	// Most pixels are pure grass: only fetch sand / rock where they actually contribute.
 	vec3 albedo = grass;
@@ -59,20 +58,14 @@ void main(void) {
 		albedo = lerp(albedo, textureGrad(rockTex, IN.texCoord, dx, dy).rgb, rockAmount);
 	}
 
-	// Foam along the waterline. The sea is opaque and hides the terrain below y = 0, so the visible
-	// seam is exactly y = 0; a noisy white fringe just above it sits on that seam and hides it.
-	// A slow wash moves the fringe up and down the beach; a fine layer breaks the edge up, and fades
-	// once one pixel covers more than a few centimetres of beach so it never shimmers into dots.
-	// The broad layer survives at distance, so the shore still reads as a white line from the road.
+	// The main shore foam is drawn by the sea shader (on the water side, from the island height map).
+	// Here only a soft, wet-looking highlight on the lowest strip of beach, so the two meet without a seam.
 	float wash  = sin(timeInfo.x * 0.35 + wobbleNoise * 6.2831853) * 0.22;
 	float shore = 1.0 - smoothstep(0.02, 0.95, IN.worldPos.y + wobble * 0.18 - wash);
 	if (shore > 0.001) {
 		float broadNoise = ValueNoise(xz * 0.55 + vec2(timeInfo.x * 0.12, 0.0));
-		float fineNoise  = ValueNoise(xz * 2.20 + vec2(timeInfo.x * 0.35, -timeInfo.x * 0.20));
-		float broad      = shore * smoothstep(0.30, 0.52, broadNoise);
-		float fine       = 1.0 - smoothstep(0.08, 0.30, max(fw.x, fw.y));
-		float foam       = broad * mix(0.55, 1.0, fine * smoothstep(0.30, 0.58, fineNoise));
-		albedo = lerp(albedo, vec3(0.93, 0.96, 0.97), foam * 0.9);
+		float foam       = shore * smoothstep(0.25, 0.55, broadNoise);
+		albedo = lerp(albedo, vec3(0.93, 0.96, 0.97), foam * 0.5);
 	}
 
 	float dist   = length(IN.worldPos - cameraPos.xyz);

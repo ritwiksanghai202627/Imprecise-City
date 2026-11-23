@@ -21,6 +21,15 @@ namespace {
 	}
 	Vector3 Mix(const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; }
 
+	// Cinematic shots: how long each plays (seconds). EvaluateShot has the matching camera moves.
+	const float kShotLength[8] = { 12.0f, 12.0f, 12.0f, 9.0f, 12.0f, 7.0f, 8.0f, 8.0f };
+	const bool  kShotNeedsCity[8] = { false, false, true, false, true, true, false, false };
+
+	const float kStartDelay = 2.0f;                        // seconds of black before anything moves
+	const float kRenderScales[3] = { 1.0f, 0.85f, 0.7f };  // R key: internal resolution of the scene
+
+	float MixF(float a, float b, float t) { return a + (b - a) * t; }
+
 	// Time-of-day presets (hours) the T key cycles through.
 	const float kTimePresets[5]  = { 12.0f, 16.5f, 18.4f, 0.0f, 6.2f };
 	const char* kTimePresetName[5] = { "noon", "afternoon", "dusk", "midnight", "dawn" };
@@ -100,6 +109,9 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	skinnedShadowShader = std::make_unique<Shader>("skinnedShadowVertex.glsl", "shadowFragment.glsl");
 	buildingShader       = std::make_unique<Shader>("buildingVertex.glsl", "buildingFragment.glsl");
 	buildingShadowShader = std::make_unique<Shader>("buildingShadowVertex.glsl", "shadowFragment.glsl");
+	brightShader    = std::make_unique<Shader>("postVertex.glsl", "brightFragment.glsl");
+	blurShader      = std::make_unique<Shader>("postVertex.glsl", "blurFragment.glsl");
+	compositeShader = std::make_unique<Shader>("postVertex.glsl", "compositeFragment.glsl");
 	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
 	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
@@ -111,6 +123,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	    !seaShader->LoadSuccess() || !litShader->LoadSuccess() || !shadowShader->LoadSuccess() ||
 	    !carShader->LoadSuccess() || !skinnedShader->LoadSuccess() || !skinnedShadowShader->LoadSuccess() ||
 	    !buildingShader->LoadSuccess() || !buildingShadowShader->LoadSuccess() ||
+	    !brightShader->LoadSuccess() || !blurShader->LoadSuccess() || !compositeShader->LoadSuccess() ||
 	    !skyShader->LoadSuccess() || !bakeSkyShader->LoadSuccess() ||
 	    !grassTexture || !sandTexture || !rockTexture) {
 		std::cout << "Renderer: resource loading failed, see messages above.\n";
@@ -118,13 +131,24 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	}
 
 	CreateWhiteTexture();
+	BuildShoreTexture();
 	BuildScene();
+	hasCity = cityFound;
+	this->cityCentre = cityCentre;
+	this->cityRoadDistance = cityRoadDistance;
 	if (cityFound) {
 		BuildCity(cityCentre, cityRoadDistance);
+
+		// Start the drive about 450 m before the city, so the opening is the winding approach into town.
+		const float length = road->GetLength();
+		carDistance = cityRoadDistance - 450.0f;
+		carDistance -= std::floor(carDistance / length) * length;
 	}
 	BuildTraffic();
 	BuildWalkers();
 	CreateShadowMap();
+	CreatePostTargets();
+	StartShot(0);
 	glGenQueries(2 * PassCount, &queries[0][0]);
 
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
@@ -153,10 +177,12 @@ Renderer::~Renderer() {
 	glDeleteTextures(1, &rockTexture);
 	glDeleteTextures(1, &whiteTexture);
 	glDeleteTextures(1, &envCube);
+	glDeleteTextures(1, &shoreTex);
 	glDeleteBuffers(1, &frameUBO);
 	glDeleteTextures(1, &shadowTex);
 	glDeleteFramebuffers(1, &shadowFBO);
 	glDeleteQueries(2 * PassCount, &queries[0][0]);
+	DestroyPostTargets();
 	if (!citySSBOs.empty()) {
 		glDeleteBuffers(static_cast<GLsizei>(citySSBOs.size()), citySSBOs.data());
 	}
@@ -193,6 +219,32 @@ void Renderer::ReadGpuTimers() {
 //   +-- sea (transparent list)
 // Only nodes with a mesh are drawn or culled. Grouping nodes exist so later batches can
 // hang things (wheels on the car, buildings in a district) off one parent transform.
+// Samples the carved terrain on a 512 x 512 grid covering the whole island and uploads it as a
+// 16-bit float texture. The sea shader reads it to know how deep the water is at any point, which
+// is what lets the foam and the shallow-water tint follow the real shoreline on the WATER side
+// (the terrain itself only ever shows the beach above y = 0).
+void Renderer::BuildShoreTexture() {
+	const int   size   = 512;
+	const float extent = terrain->GetHalfExtent();
+	std::vector<float> heights(static_cast<size_t>(size) * size);
+	for (int z = 0; z < size; ++z) {
+		for (int x = 0; x < size; ++x) {
+			const float wx = ((x + 0.5f) / size * 2.0f - 1.0f) * extent;
+			const float wz = ((z + 0.5f) / size * 2.0f - 1.0f) * extent;
+			heights[static_cast<size_t>(z) * size + x] = terrain->HeightAt(wx, wz);
+		}
+	}
+
+	glGenTextures(1, &shoreTex);
+	glBindTexture(GL_TEXTURE_2D, shoreTex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, size, size, 0, GL_RED, GL_FLOAT, heights.data());
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 void Renderer::BuildScene() {
 	root = std::make_unique<SceneNode>();
 
@@ -561,6 +613,245 @@ void Renderer::UpdateTraffic(float dt) {
 	}
 }
 
+// ---- Cinematic director ---------------------------------------------------------------------
+
+void Renderer::GetCarFrame(Vector3& position, Vector3& forward, Vector3& right) const {
+	forward  = road->DirectionAt(carDistance);
+	right    = Vector3(-forward.z, 0.0f, forward.x);
+	position = road->PositionAt(carDistance) + right * kPlayerLane;
+}
+
+void Renderer::StartShot(int index) {
+	shotIndex = index;
+	shotTime  = 0.0f;
+	shotStartCarDistance = carDistance;
+}
+
+// Back in auto mode: carry on with the first shot the viewer has not seen yet. When everything has
+// been seen the list starts over.
+void Renderer::ResumeDirector() {
+	int next = -1;
+	for (int i = 0; i < kShotCount; ++i) {
+		if (!shotSeen[i] && (hasCity || !kShotNeedsCity[i])) {
+			next = i;
+			break;
+		}
+	}
+	if (next < 0) {
+		for (int i = 0; i < kShotCount; ++i) { shotSeen[i] = 0; }
+		next = 0;
+	}
+	StartShot(next);
+}
+
+void Renderer::UpdateCinematicCamera(float dt) {
+	shotTime += dt;
+	if (shotTime > 3.0f) {
+		shotSeen[shotIndex] = 1;   // watched long enough to count
+	}
+	if (shotTime >= kShotLength[shotIndex]) {
+		int next = (shotIndex + 1) % kShotCount;
+		while (kShotNeedsCity[next] && !hasCity) {
+			next = (next + 1) % kShotCount;
+		}
+		StartShot(next);
+	}
+
+	// Cut through black: fade in over the first 0.4 s of a shot, out over the last 0.4 s.
+	const float length = kShotLength[shotIndex];
+	fade = std::max(1.0f - shotTime / 0.4f, 1.0f - (length - shotTime) / 0.4f);
+	fade = std::min(std::max(fade, 0.0f), 1.0f);
+
+	EvaluateShot(shotIndex, shotTime, eyePosition, lookTarget, shotFov);
+	viewMatrix = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
+}
+
+// The camera moves. t = seconds since the shot started.
+void Renderer::EvaluateShot(int index, float t, Vector3& eye, Vector3& target, float& fov) const {
+	fov = 60.0f;
+	Vector3 carPos, fwd, right;
+	GetCarFrame(carPos, fwd, right);
+	const float s = Smoothstep(0.0f, 1.0f, t / kShotLength[index]);   // eased 0..1 over the shot
+
+	switch (index) {
+	case 0: {   // Chase: behind the car, looking down the road
+		const Vector3 lane = right * kPlayerLane;
+		eye    = road->PositionAt(carDistance - kCamBehind) + lane + Vector3(0.0f, kCamHeight, 0.0f);
+		target = road->PositionAt(carDistance + kLookAhead) + lane + Vector3(0.0f, kLookHeight, 0.0f);
+		break;
+	}
+	case 1: {   // Island overview: a slow orbit high above the whole island
+		const float a = 0.6f + t * 0.10f;
+		eye    = Vector3(std::cos(a) * 950.0f, 380.0f + 60.0f * std::sin(t * 0.4f), std::sin(a) * 950.0f);
+		target = Vector3(0.0f, 30.0f, 0.0f);
+		fov    = 55.0f;
+		break;
+	}
+	case 2: {   // Descent: swoop down from the hills onto the city
+		const Vector3 start = cityCentre + Vector3(330.0f, 230.0f, 300.0f);
+		const Vector3 end   = cityCentre + Vector3(95.0f, 28.0f, 85.0f);
+		eye    = Mix(start, end, s);
+		target = cityCentre + Vector3(0.0f, 30.0f, 0.0f);
+		break;
+	}
+	case 3: {   // Roadside: a fixed camera by the road, the car drives past it
+		const float base = shotStartCarDistance + 95.0f;
+		const Vector3 d  = road->DirectionAt(base);
+		const Vector3 r(-d.z, 0.0f, d.x);
+		eye    = road->PositionAt(base) + r * (kPlayerLane + 11.0f) + Vector3(0.0f, 1.8f, 0.0f);
+		target = carPos + Vector3(0.0f, 1.0f, 0.0f);
+		break;
+	}
+	case 4: {   // Fly-through: gliding down the main street of the city
+		const float base = cityRoadDistance - 140.0f + t * 20.0f;
+		eye    = road->PositionAt(base) + Vector3(0.0f, 12.0f + 4.0f * s, 0.0f);
+		target = road->PositionAt(base + 60.0f) + Vector3(0.0f, 10.0f, 0.0f);
+		break;
+	}
+	case 5: {   // Tilt up: standing in the street, looking up at the towers
+		const float base = cityRoadDistance + 30.0f;
+		const Vector3 d  = road->DirectionAt(base);
+		const Vector3 r(-d.z, 0.0f, d.x);
+		eye    = road->PositionAt(base) + r * 9.0f + Vector3(0.0f, 1.7f, 0.0f);
+		target = cityCentre + Vector3(0.0f, MixF(10.0f, 110.0f, s), 0.0f);
+		fov    = 70.0f;
+		break;
+	}
+	case 6: {   // Bonnet: first person from the car
+		eye    = carPos + fwd * 0.6f + Vector3(0.0f, 1.5f, 0.0f);
+		target = carPos + fwd * 40.0f + Vector3(0.0f, 1.0f, 0.0f);
+		fov    = 70.0f;
+		break;
+	}
+	default: {  // Drone: circling the car
+		const float a = t * 0.55f;
+		eye    = carPos + Vector3(std::cos(a) * 16.0f, 7.0f + 2.0f * std::sin(t), std::sin(a) * 16.0f);
+		target = carPos + Vector3(0.0f, 1.0f, 0.0f);
+		break;
+	}
+	}
+}
+
+// ---- Post-processing ------------------------------------------------------------------------
+
+// The scene is drawn into a floating-point colour target, so lights can be brighter than 1.0 and the
+// bloom pass can find them. R11G11B10F is 32 bits per pixel (as cheap to write as a normal 8-bit
+// target, half the memory traffic of RGBA16F) and still stores values above 1.
+// Bloom works at a quarter of the scene resolution: it is blurry anyway.
+void Renderer::CreatePostTargets() {
+	DestroyPostTargets();
+
+	sceneWidth  = std::max(static_cast<int>(width  * kRenderScales[renderScaleIndex]), 1);
+	sceneHeight = std::max(static_cast<int>(height * kRenderScales[renderScaleIndex]), 1);
+
+	glGenTextures(1, &hdrColour);
+	glBindTexture(GL_TEXTURE_2D, hdrColour);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, sceneWidth, sceneHeight, 0, GL_RGB, GL_FLOAT, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	glGenRenderbuffers(1, &hdrDepth);
+	glBindRenderbuffer(GL_RENDERBUFFER, hdrDepth);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, sceneWidth, sceneHeight);
+
+	glGenFramebuffers(1, &hdrFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, hdrColour, 0);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, hdrDepth);
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+		std::cout << "Renderer: HDR framebuffer is not complete!\n";
+	}
+
+	bloomWidth  = std::max(sceneWidth / 4, 1);
+	bloomHeight = std::max(sceneHeight / 4, 1);
+	glGenTextures(2, bloomTex);
+	glGenFramebuffers(2, bloomFBO);
+	for (int i = 0; i < 2; ++i) {
+		glBindTexture(GL_TEXTURE_2D, bloomTex[i]);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_R11F_G11F_B10F, bloomWidth, bloomHeight, 0, GL_RGB, GL_FLOAT, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO[i]);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bloomTex[i], 0);
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Renderer::DestroyPostTargets() {
+	if (hdrFBO) {
+		glDeleteFramebuffers(1, &hdrFBO);
+		glDeleteTextures(1, &hdrColour);
+		glDeleteRenderbuffers(1, &hdrDepth);
+		glDeleteFramebuffers(2, bloomFBO);
+		glDeleteTextures(2, bloomTex);
+		hdrFBO = hdrColour = hdrDepth = 0;
+	}
+}
+
+// R: render the scene at 100%, 85% or 70% of the window size and let the composite pass scale it up.
+// Costs sharpness, saves fill rate: the fallback if a slower lab GPU misses 60 fps.
+void Renderer::CycleRenderScale() {
+	renderScaleIndex = (renderScaleIndex + 1) % 3;
+	CreatePostTargets();
+	std::cout << "Render scale: " << static_cast<int>(kRenderScales[renderScaleIndex] * 100.0f) << "%\n";
+}
+
+void Renderer::RenderPostProcessing() {
+	StartDebugGroup("Post-processing");
+	BeginGpuTimer(PassPost);
+	glDisable(GL_DEPTH_TEST);
+
+	if (bloomEnabled) {
+		// 1. Bright pass: HDR scene -> quarter-size texture holding only the very bright parts.
+		glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO[0]);
+		glViewport(0, 0, bloomWidth, bloomHeight);
+		Use(*brightShader);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, hdrColour);
+		glUniform2f(glGetUniformLocation(activeProgram, "texelSize"), 1.0f / sceneWidth, 1.0f / sceneHeight);
+		seaMesh->Draw();
+
+		// 2. Blur: horizontal then vertical, twice (ping-pong between the two bloom textures).
+		Use(*blurShader);
+		const GLint directionLoc = glGetUniformLocation(activeProgram, "direction");
+		for (int pass = 0; pass < 2; ++pass) {
+			glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO[1]);
+			glBindTexture(GL_TEXTURE_2D, bloomTex[0]);
+			glUniform2f(directionLoc, 1.0f / bloomWidth, 0.0f);
+			seaMesh->Draw();
+
+			glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO[0]);
+			glBindTexture(GL_TEXTURE_2D, bloomTex[1]);
+			glUniform2f(directionLoc, 0.0f, 1.0f / bloomHeight);
+			seaMesh->Draw();
+		}
+	}
+
+	// 3. Composite to the screen (this is also where a reduced render scale is scaled back up).
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	glViewport(0, 0, width, height);
+	Use(*compositeShader);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, hdrColour);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_2D, bloomTex[0]);
+	glUniform1f(glGetUniformLocation(activeProgram, "bloomAmount"), bloomEnabled ? 0.7f : 0.0f);
+	glUniform1f(glGetUniformLocation(activeProgram, "vignetteAmount"), vignetteEnabled ? 0.45f : 0.0f);
+	glUniform1f(glGetUniformLocation(activeProgram, "fade"), fade);
+	seaMesh->Draw();
+
+	glActiveTexture(GL_TEXTURE0);
+	glEnable(GL_DEPTH_TEST);
+	materialBound = false;
+	EndGpuTimer();
+	EndDebugGroup();
+}
+
 GLuint Renderer::LoadTexture(const std::string& fileName) {
 	const std::string path = std::string(TEXTUREDIR) + fileName;
 	GLuint tex = SOIL_load_OGL_texture(path.c_str(), SOIL_LOAD_AUTO, SOIL_CREATE_NEW_ID, SOIL_FLAG_MIPMAPS);
@@ -588,8 +879,15 @@ void Renderer::Use(Shader& shader) {
 void Renderer::UpdateScene(float /*dt*/) {
 	const auto now = std::chrono::steady_clock::now();
 	const float rawDt = std::chrono::duration<float>(now - lastTick).count();   // real frame time, for the stats
-	const float dt    = std::min(rawDt, 0.1f);                                  // the simulation never jumps by more than 0.1 s
+	float dt          = std::min(rawDt, 0.1f);                                  // the simulation never jumps by more than 0.1 s
 	lastTick = now;
+
+	// Hold still (screen black) for the first couple of seconds, so a screen recording can start
+	// before anything moves and without the first frames of start-up showing.
+	if (startupTimer < kStartDelay) {
+		startupTimer += rawDt;
+		dt = 0.0f;
+	}
 	elapsedSeconds += dt;
 
 	auto* keys = Window::GetKeyboard();
@@ -602,6 +900,9 @@ void Renderer::UpdateScene(float /*dt*/) {
 		std::cout << "Time of day: " << kTimePresetName[timePreset] << "\n";
 	}
 	if (keys->KeyTriggered(KEYBOARD_Y)) { timeAuto = !timeAuto; }
+	if (keys->KeyTriggered(KEYBOARD_B)) { bloomEnabled = !bloomEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_V)) { vignetteEnabled = !vignetteEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_R)) { CycleRenderScale(); }
 	if (timeAuto) {
 		timeOfDay += dt / 6.0f;   // 6 real seconds per hour: a whole day in 144 seconds
 		if (timeOfDay >= 24.0f) { timeOfDay -= 24.0f; }
@@ -609,13 +910,16 @@ void Renderer::UpdateScene(float /*dt*/) {
 
 	UpdateCar(dt);   // the world keeps running when the camera is released
 	if (cameraMode == CameraMode::Cinematic) {
-		UpdateCinematicCamera();
+		UpdateCinematicCamera(dt);
+		if (startupTimer < kStartDelay) { fade = 1.0f; }
 	}
 	else {
+		fade    = 0.0f;
+		shotFov = 60.0f;
 		UpdateFreeCamera(dt);
 	}
 
-	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, 60.0f);
+	projMatrix = Matrix4::Perspective(1.0f, 6000.0f, (float)width / (float)height, shotFov);
 
 	ApplyTimeOfDay();
 	if (std::fabs(timeOfDay - lastBakedHour) > 0.04f) {
@@ -649,15 +953,6 @@ void Renderer::UpdateCar(float dt) {
 		Matrix4::Translation(pos + Vector3(0.0f, 0.6f, 0.0f)) *
 		Matrix4::Rotation(YawFromDirection(dir), Vector3(0, 1, 0)) *
 		Matrix4::Rotation(PitchFromDirection(dir), Vector3(1, 0, 0)));
-}
-
-void Renderer::UpdateCinematicCamera() {
-	// Stay in the car's lane (a little to the right of the centre line).
-	const Vector3 d = road->DirectionAt(carDistance);
-	const Vector3 lane = Vector3(-d.z, 0.0f, d.x) * kPlayerLane;
-	eyePosition = road->PositionAt(carDistance - kCamBehind) + lane + Vector3(0.0f, kCamHeight, 0.0f);
-	lookTarget  = road->PositionAt(carDistance + kLookAhead) + lane + Vector3(0.0f, kLookHeight, 0.0f);
-	viewMatrix  = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
 }
 
 void Renderer::UpdateFreeCamera(float dt) {
@@ -697,6 +992,7 @@ void Renderer::SwitchCameraMode() {
 	}
 	else {
 		cameraMode = CameraMode::Cinematic;
+		ResumeDirector();   // continue with a shot the viewer has not seen yet
 		cullingFrozen = false;   // a frozen frustum only makes sense while flying around
 	}
 }
@@ -722,11 +1018,12 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 
 	char title[420];
 	std::snprintf(title, sizeof(title),
-		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f | frustum %s | shadows %s | cam %s | fly %.2fx",
+		"Grand Theft const auto& : Imprecise City | %.0f fps (avg %.0f, low %.0f, high %.0f) | nodes %u/%u | draws %u (+%u shadow) | tris %u | %02d:%02d | GPU ms: shadow %.2f opaque %.2f sky %.2f transp %.2f post %.2f | bloom %s vignette %s | frustum %s | shadows %s | cam %s | fly %.2fx",
 		titleFrames / titleTimer, average, low, high,
 		stats.nodesDrawn, stats.nodesTotal, stats.drawCalls, stats.shadowDraws, stats.triangles,
 		static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
-		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent],
+		gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent], gpuMs[PassPost],
+		bloomEnabled ? "on" : "off", vignetteEnabled ? "on" : "off",
 		cullingFrozen ? "FROZEN" : "camera",
 		shadowsEnabled ? "on" : "off",
 		cameraMode == CameraMode::Cinematic ? "cinematic" : "free",
@@ -1026,6 +1323,8 @@ void Renderer::RenderScene() {
 		EndGpuTimer();
 	}
 
+	glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);   // the scene is drawn into the HDR target, post-processing puts it on screen
+	glViewport(0, 0, sceneWidth, sceneHeight);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 	// The shadow map lives on texture unit 4 for the whole main pass (see lighting.glslh).
@@ -1033,6 +1332,8 @@ void Renderer::RenderScene() {
 	glBindTexture(GL_TEXTURE_2D, shadowTex);
 	glActiveTexture(GL_TEXTURE5);   // the environment cube map lives on unit 5 (see carFragment.glsl)
 	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
+	glActiveTexture(GL_TEXTURE6);   // island heights for the sea's shoreline foam (see water.glslh)
+	glBindTexture(GL_TEXTURE_2D, shoreTex);
 	glActiveTexture(GL_TEXTURE0);
 	materialBound = false;
 
@@ -1061,6 +1362,8 @@ void Renderer::RenderScene() {
 	glDisable(GL_BLEND);
 	EndGpuTimer();
 	EndDebugGroup();
+
+	RenderPostProcessing();
 
 	// An unused query object cannot be read, so shadows-off frames must still issue the shadow one.
 	if (!shadowsEnabled) {

@@ -62,7 +62,7 @@ struct FrameStats {
 
 // GPU time per pass, measured with GL_TIME_ELAPSED queries. The result of a query is read one
 // frame late (two query sets alternate), so reading never stalls the pipeline.
-enum GpuPass { PassShadow, PassOpaque, PassSky, PassTransparent, PassCount };
+enum GpuPass { PassShadow, PassOpaque, PassSky, PassTransparent, PassPost, PassCount };
 
 class Renderer : public OGLRenderer {
 public:
@@ -96,7 +96,18 @@ private:
 	void UpdateWalkers(float dt);
 
 	// Camera and per-frame
-	void   UpdateCinematicCamera();
+	void   UpdateCinematicCamera(float dt);   // the shot director (see EvaluateShot)
+	void   StartShot(int index);
+	void   ResumeDirector();                  // back to auto mode: continue with the next shot not yet seen
+	void   EvaluateShot(int index, float t, Vector3& eye, Vector3& target, float& fov) const;
+	void   GetCarFrame(Vector3& position, Vector3& forward, Vector3& right) const;
+
+	// Post-processing: the scene renders into an HDR target, then bloom + tone map + vignette
+	void   CreatePostTargets();
+	void   DestroyPostTargets();
+	void   CycleRenderScale();
+	void   BuildShoreTexture();   // island height map for the sea shader (shore foam, shallow water)
+	void   RenderPostProcessing();
 	void   UpdateFreeCamera(float dt);
 	void   SwitchCameraMode();
 	void   UpdateCar(float dt);
@@ -109,6 +120,30 @@ private:
 	void   UpdateWindowTitle(float dt);
 	GLuint LoadTexture(const std::string& fileName);
 	void   Use(Shader& shader);
+
+	// Cinematic director: a list of shots played in order. Shots watched for a few seconds count
+	// as seen; when auto mode is resumed after free flight it continues at the first unseen shot.
+	static const int kShotCount = 8;
+	int    shotIndex = 0;
+	float  shotTime  = 0.0f;
+	float  shotStartCarDistance = 0.0f;   // where the car was when the shot began (some shots wait for it)
+	char   shotSeen[kShotCount] = {};
+	float  shotFov   = 60.0f;
+	float  fade      = 0.0f;              // 0..1 black, drives the composite pass
+	float  startupTimer = 0.0f;           // the world holds still (screen black) for the first moments, so a recording can start cleanly
+	bool   hasCity   = false;
+	Vector3 cityCentre;
+	float   cityRoadDistance = 0.0f;
+
+	// HDR render target and bloom chain (quarter resolution of the scene target)
+	GLuint hdrFBO = 0, hdrColour = 0, hdrDepth = 0;
+	GLuint bloomFBO[2] = {}, bloomTex[2] = {};
+	int    sceneWidth = 0, sceneHeight = 0;    // size of the HDR target = window size x renderScale
+	int    bloomWidth = 0, bloomHeight = 0;
+	int    renderScaleIndex = 0;               // R cycles 100% / 85% / 70% (a safety net for slow GPUs)
+	std::unique_ptr<Shader> brightShader, blurShader, compositeShader;
+	bool   bloomEnabled    = true;   // B toggles
+	bool   vignetteEnabled = true;   // V toggles (vignette + colour grade)
 
 	// Camera
 	Camera     camera;               // nclgl free-fly camera
@@ -194,6 +229,7 @@ private:
 	std::unique_ptr<Shader> carShader, skinnedShader, skinnedShadowShader, skyShader, bakeSkyShader;
 	GLuint grassTexture = 0, sandTexture = 0, rockTexture = 0;
 	GLuint whiteTexture = 0;           // 1x1 white, bound when a model has no texture
+	GLuint shoreTex = 0;               // terrain height over the whole island, unit 6 (see water.glslh)
 	GLuint envCube = 0;                // sky baked into a cube map, reflected by the car
 	Vector3 zenithColour;              // sky colour straight up (horizon colour = fog colour)
 	GLuint activeProgram = 0;
