@@ -180,6 +180,7 @@
     <ClInclude Include="AnimatedModel.h" />
     <ClInclude Include="City.h" />
     <ClInclude Include="CityDistrict.h" />
+    <ClInclude Include="DebugOverlay.h" />
     <ClInclude Include="ProceduralMesh.h" />
     <ClInclude Include="Renderer.h" />
     <ClInclude Include="RoadPath.h" />

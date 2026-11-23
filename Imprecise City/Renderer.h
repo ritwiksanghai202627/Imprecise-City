@@ -9,6 +9,7 @@
 #include "RoadPath.h"
 #include "City.h"
 #include "CityDistrict.h"
+#include "DebugOverlay.h"
 
 #include <chrono>
 #include <memory>
@@ -118,6 +119,7 @@ private:
 	void   BuildTraffic();
 	void   UpdateTraffic(float dt);
 	void   UpdateWindowTitle(float dt);
+	void   DrawOverlay();         // debug text on top of the finished frame (O, K, I)
 	GLuint LoadTexture(const std::string& fileName);
 	void   Use(Shader& shader);
 
@@ -149,7 +151,13 @@ private:
 	bool   bloomEnabled    = true;   // B toggles
 	bool   vignetteEnabled = true;   // V toggles (vignette + colour grade)
 	bool   lensEnabled     = true;   // L toggles (chromatic aberration + film grain, in the composite pass)
-	bool   verboseTitle    = false;  // I toggles the detailed title (GPU ms per pass)
+	bool   verboseTitle    = false;  // I adds the GPU / CPU timings to the overlay
+
+	// Debug overlay: O toggles it, K lists the keys, I adds timings. Off by default so recordings stay clean.
+	std::unique_ptr<DebugOverlay> overlay;
+	bool   overlayEnabled = false;
+	bool   keysPanel      = false;
+	float  displayFps = 0.0f, displayAvg = 0.0f, displayLow = 0.0f;   // refreshed twice a second with the title
 
 	// Camera
 	Camera     camera;               // nclgl free-fly camera
@@ -217,6 +225,12 @@ private:
 
 	// GPU pass timers (see GpuPass). [set][pass]; 'set' alternates every frame.
 	GLuint queries[2][PassCount] = {};
+	// Whole-frame GPU time: two GL_TIMESTAMP queries (start / end of RenderScene) per set. A timestamp
+	// pair can run alongside the per-pass GL_TIME_ELAPSED queries, which cannot be nested.
+	GLuint frameStamps[2][2] = {};
+	float  gpuFrameMs = 0.0f;     // GPU time from the first to the last command of the frame (smoothed)
+	float  cpuUpdateMs = 0.0f;    // CPU time inside UpdateScene (smoothed)
+	float  cpuRenderMs = 0.0f;    // CPU time inside RenderScene = command submission + any driver waits (smoothed)
 	float  gpuMs[PassCount]      = {};   // latest smoothed result in milliseconds
 	int    querySet              = 0;
 	bool   queriesPrimed         = false;   // false until set 0 has been issued once
@@ -237,6 +251,7 @@ private:
 	GLuint whiteTexture = 0;           // 1x1 white, bound when a model has no texture
 	GLuint shoreTex = 0;               // terrain height over the whole island, unit 6 (see water.glslh)
 	GLuint envCube = 0;                // sky baked into a cube map, reflected by the car
+	GLuint envFBO  = 0;                // framebuffer the sky is baked through (created once, reused by every re-bake)
 	Vector3 zenithColour;              // sky colour straight up (horizon colour = fog colour)
 	GLuint activeProgram = 0;
 

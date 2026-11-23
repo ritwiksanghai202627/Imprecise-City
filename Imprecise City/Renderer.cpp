@@ -116,6 +116,13 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
 	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
+	// Debug overlay (O / K / I). Not fatal if it fails: it is a debugging aid, the scene does not need it.
+	overlay = std::make_unique<DebugOverlay>();
+	if (!overlay->Create(height)) {
+		std::cout << "Renderer: debug overlay unavailable (see messages above).\n";
+		overlay.reset();
+	}
+
 	grassTexture = LoadTexture("grass.png");
 	sandTexture  = LoadTexture("sand.png");
 	rockTexture  = LoadTexture("rock.png");
@@ -151,6 +158,7 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	CreatePostTargets();
 	StartShot(0);
 	glGenQueries(2 * PassCount, &queries[0][0]);
+	glGenQueries(4, &frameStamps[0][0]);
 
 	// Frame uniform buffer, bound once to binding point 0 (matches frame.glslh).
 	glGenBuffers(1, &frameUBO);
@@ -183,6 +191,8 @@ Renderer::~Renderer() {
 	glDeleteTextures(1, &shadowTex);
 	glDeleteFramebuffers(1, &shadowFBO);
 	glDeleteQueries(2 * PassCount, &queries[0][0]);
+	glDeleteQueries(4, &frameStamps[0][0]);
+	glDeleteFramebuffers(1, &envFBO);
 	DestroyPostTargets();
 	if (!citySSBOs.empty()) {
 		glDeleteBuffers(static_cast<GLsizei>(citySSBOs.size()), citySSBOs.data());
@@ -206,7 +216,15 @@ void Renderer::ReadGpuTimers() {
 	for (int p = 0; p < PassCount; ++p) {
 		GLuint64 ns = 0;
 		glGetQueryObjectui64v(queries[previous][p], GL_QUERY_RESULT, &ns);
-		gpuMs[p] = gpuMs[p] * 0.9f + (float)(ns * 1e-6) * 0.1f;   // smooth so the title is readable
+		gpuMs[p] = gpuMs[p] * 0.9f + (float)(ns * 1e-6) * 0.1f;   // smooth so the numbers are readable
+	}
+
+	// Whole frame: end stamp minus start stamp, in nanoseconds.
+	GLuint64 first = 0, last = 0;
+	glGetQueryObjectui64v(frameStamps[previous][0], GL_QUERY_RESULT, &first);
+	glGetQueryObjectui64v(frameStamps[previous][1], GL_QUERY_RESULT, &last);
+	if (last > first) {
+		gpuFrameMs = gpuFrameMs * 0.9f + (float)((last - first) * 1e-6) * 0.1f;
 	}
 }
 
@@ -300,23 +318,25 @@ void Renderer::BuildEnvironmentMap() {
 	StartDebugGroup("Bake environment map");
 
 	if (!envCube) {
+		// First bake: allocate the cube map and its framebuffer ONCE. Re-specifying the texture and
+		// creating / deleting a framebuffer on every re-bake (four times a second while the clock runs)
+		// made the driver reallocate memory the GPU may still be reading; later bakes only re-render.
 		glGenTextures(1, &envCube);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
+		for (int face = 0; face < 6; ++face) {
+			// 16-bit float, so the bright sun disc keeps values above 1 for reflections
+			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, nullptr);
+		}
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+		glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+		glGenFramebuffers(1, &envFBO);
 	}
-	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
-	for (int face = 0; face < 6; ++face) {
-		// 16-bit float, so the bright sun disc keeps values above 1 for reflections
-		glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, nullptr);
-	}
-	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-	glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
-	GLuint fbo = 0;
-	glGenFramebuffers(1, &fbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, envFBO);
 	glViewport(0, 0, size, size);
 
 	UploadFrameData();   // the bake shader reads the sun and fog from the frame UBO
@@ -330,7 +350,6 @@ void Renderer::BuildEnvironmentMap() {
 	}
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glDeleteFramebuffers(1, &fbo);
 	glViewport(0, 0, width, height);
 
 	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
@@ -950,6 +969,8 @@ void Renderer::UpdateScene(float /*dt*/) {
 	if (keys->KeyTriggered(KEYBOARD_R)) { CycleRenderScale(); }
 	if (keys->KeyTriggered(KEYBOARD_L)) { lensEnabled = !lensEnabled; }
 	if (keys->KeyTriggered(KEYBOARD_I)) { verboseTitle = !verboseTitle; }
+	if (keys->KeyTriggered(KEYBOARD_O)) { overlayEnabled = !overlayEnabled; }
+	if (keys->KeyTriggered(KEYBOARD_K)) { keysPanel = !keysPanel; if (keysPanel) { overlayEnabled = true; } }
 	if (timeAuto) {
 		timeOfDay += dt / 6.0f;   // 6 real seconds per hour: a whole day in 144 seconds
 		if (timeOfDay >= 24.0f) { timeOfDay -= 24.0f; }
@@ -988,6 +1009,7 @@ void Renderer::UpdateScene(float /*dt*/) {
 
 	UpdateLights();
 	UpdateShadowMatrix();
+	cpuUpdateMs = cpuUpdateMs * 0.9f + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - now).count() * 0.1f;
 	UpdateWindowTitle(rawDt);
 }
 
@@ -1089,27 +1111,13 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 	const double average = fpsFrames ? fpsFrames / fpsTotalTime : 0.0;
 	const double low     = worstFrame > 0.0f ? 1.0 / worstFrame : 0.0;
 
-	const char* camName = cameraMode == CameraMode::Drive ? "drive" : cameraMode == CameraMode::Free ? "free" : "trailer";
-	const int   scale   = static_cast<int>(kRenderScales[renderScaleIndex] * 100.0f + 0.5f);
+	displayFps = titleFrames / titleTimer;
+	displayAvg = (float)average;
+	displayLow = (float)low;
 
-	// Short by default (the title bar is small); I shows the per-pass GPU times as well.
-	char title[420];
-	if (verboseTitle) {
-		std::snprintf(title, sizeof(title),
-			"Imprecise City | %.0f fps (avg %.0f, low %.0f) | %02d:%02d | scale %d%% | cam %s | draws %u (+%u) tris %u | GPU ms: sh %.1f op %.1f sky %.1f tr %.1f post %.1f",
-			titleFrames / titleTimer, average, low,
-			static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
-			scale, camName, stats.drawCalls, stats.shadowDraws, stats.triangles,
-			gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent], gpuMs[PassPost]);
-	}
-	else {
-		std::snprintf(title, sizeof(title),
-			"Imprecise City | %.0f fps (avg %.0f, low %.0f) | %02d:%02d | scale %d%% | cam %s | bloom %s vig %s lens %s shadows %s | I = details",
-			titleFrames / titleTimer, average, low,
-			static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f),
-			scale, camName,
-			bloomEnabled ? "on" : "off", vignetteEnabled ? "on" : "off", lensEnabled ? "on" : "off", shadowsEnabled ? "on" : "off");
-	}
+	// The title stays short now; everything else lives in the overlay (O).
+	char title[96];
+	std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | O = overlay, K = keys", displayFps);
 	if (HWND window = GetActiveWindow()) {
 		SetWindowTextA(window, title);
 	}
@@ -1394,10 +1402,12 @@ void Renderer::DrawNodes(const std::vector<SceneObject*>& list) {
 }
 
 void Renderer::RenderScene() {
+	const auto cpuStart = std::chrono::steady_clock::now();
 	stats = FrameStats();
 	UploadFrameData();
 
 	ReadGpuTimers();
+	glQueryCounter(frameStamps[querySet][0], GL_TIMESTAMP);   // start of this frame on the GPU timeline
 
 	if (shadowsEnabled) {
 		BeginGpuTimer(PassShadow);
@@ -1446,6 +1456,8 @@ void Renderer::RenderScene() {
 	EndDebugGroup();
 
 	RenderPostProcessing();
+	DrawOverlay();
+	glQueryCounter(frameStamps[querySet][1], GL_TIMESTAMP);   // end of this frame (overlay included)
 
 	// An unused query object cannot be read, so shadows-off frames must still issue the shadow one.
 	if (!shadowsEnabled) {
@@ -1456,4 +1468,79 @@ void Renderer::RenderScene() {
 	querySet = 1 - querySet;
 
 	ClearNodeLists();
+	cpuRenderMs = cpuRenderMs * 0.9f + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - cpuStart).count() * 0.1f;
+}
+
+// Debug overlay: translucent panels with text, drawn straight onto the screen after post-processing
+// (so it is never tinted, bloomed or faded). O toggles it, K adds the key list, I adds the timings.
+void Renderer::DrawOverlay() {
+	if (!overlay || !overlayEnabled) {
+		return;
+	}
+	StartDebugGroup("Debug overlay");
+
+	struct Line { std::string text; Vector4 colour; };
+	std::vector<Line> lines;
+	char buf[256];
+	const Vector4 white(0.95f, 0.95f, 0.95f, 1.0f);
+	const Vector4 dim(0.62f, 0.70f, 0.78f, 1.0f);
+	const Vector4 green(0.45f, 1.00f, 0.55f, 1.0f);
+	const Vector4 amber(1.00f, 0.80f, 0.30f, 1.0f);
+	const Vector4 red(1.00f, 0.40f, 0.35f, 1.0f);
+
+	const char* camName = cameraMode == CameraMode::Drive ? "drive" : cameraMode == CameraMode::Free ? "free" : "trailer";
+	const int   scale   = static_cast<int>(kRenderScales[renderScaleIndex] * 100.0f + 0.5f);
+	const char* on  = "on ";
+	const char* off = "off";
+
+	// Green at 60 fps or better, amber down to 45, red below.
+	std::snprintf(buf, sizeof(buf), "FPS %3.0f (avg %.0f, low %.0f)  frame %.1f ms", displayFps, displayAvg, displayLow, displayFps > 0.0f ? 1000.0f / displayFps : 0.0f);
+	lines.push_back({ buf, displayFps >= 59.0f ? green : displayFps >= 45.0f ? amber : red });
+	std::snprintf(buf, sizeof(buf), "Time %02d:%02d  cam %s  scale %d%%", static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f), camName, scale);
+	lines.push_back({ buf, white });
+	std::snprintf(buf, sizeof(buf), "bloom %s  vignette %s  lens %s  shadows %s", bloomEnabled ? on : off, vignetteEnabled ? on : off, lensEnabled ? on : off, shadowsEnabled ? on : off);
+	lines.push_back({ buf, white });
+	std::snprintf(buf, sizeof(buf), "draws %u (+%u shadow)  tris %u  nodes %u/%u", stats.drawCalls, stats.shadowDraws, stats.triangles, stats.nodesDrawn, stats.nodesTotal);
+	lines.push_back({ buf, white });
+
+	if (verboseTitle) {
+		const float passSum = gpuMs[PassShadow] + gpuMs[PassOpaque] + gpuMs[PassSky] + gpuMs[PassTransparent] + gpuMs[PassPost];
+		std::snprintf(buf, sizeof(buf), "GPU ms: shadow %.1f  opaque %.1f  sky %.1f  transp %.1f  post %.1f", gpuMs[PassShadow], gpuMs[PassOpaque], gpuMs[PassSky], gpuMs[PassTransparent], gpuMs[PassPost]);
+		lines.push_back({ buf, dim });
+		std::snprintf(buf, sizeof(buf), "GPU frame %.1f ms (passes add up to %.1f)", gpuFrameMs, passSum);
+		lines.push_back({ buf, dim });
+		std::snprintf(buf, sizeof(buf), "CPU ms: update %.1f  render %.1f  (60 fps = 16.7)", cpuUpdateMs, cpuRenderMs);
+		lines.push_back({ buf, dim });
+	}
+	lines.push_back({ "O overlay   K keys   I timings", dim });
+
+	if (keysPanel) {
+		lines.push_back({ "", dim });
+		lines.push_back({ "C   camera: drive / free / trailer", white });
+		lines.push_back({ "WASD + mouse   fly (free camera); mouse buttons = slower / faster", white });
+		lines.push_back({ "T   time preset      Y   run / stop the clock", white });
+		lines.push_back({ "B   bloom   V   vignette + grade   L   lens (aberration + grain)", white });
+		lines.push_back({ "R   render scale 100 / 85 / 70 %", white });
+		lines.push_back({ "H   shadows   F   freeze culling frustum", white });
+	}
+
+	overlay->Begin(width, height);
+	const float charW = overlay->CharWidth();
+	const float lineH = overlay->LineHeight();
+	const float pad   = 8.0f;
+	size_t longest = 0;
+	for (const Line& line : lines) {
+		longest = std::max(longest, line.text.size());
+	}
+	overlay->Panel(pad, pad, longest * charW + pad * 2.0f, lines.size() * lineH + pad * 2.0f, Vector4(0.0f, 0.0f, 0.0f, 0.55f));
+	float y = pad * 2.0f;
+	for (const Line& line : lines) {
+		overlay->Text(pad * 2.0f, y, line.text.c_str(), line.colour);
+		y += lineH;
+	}
+
+	Use(overlay->GetShader());
+	overlay->Draw();
+	materialBound = false;   // the active program changed outside BindMaterial
+	EndDebugGroup();
 }
