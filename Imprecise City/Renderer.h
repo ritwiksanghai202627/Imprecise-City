@@ -47,10 +47,13 @@ struct FrameData {
 	Vector4 environment;   // x = night factor, y = point lights used, z = spot lights used, w = ambient scale
 	GpuPointLight pointLights[kMaxPointLights];
 	GpuSpotLight  spotLights[kMaxSpotLights];
+	// Second shadow cascade, appended at the END so every earlier offset is unchanged (see frame.glslh).
+	Matrix4 shadowViewProj2;   // far cascade; 'shadowViewProj' above is the near one
+	Vector4 shadowCascade;     // x = normal offset (world units), y = depth bias, both for the near cascade
 };
 static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
-static_assert(sizeof(FrameData) == 3 * 64 + 7 * 16 + kMaxPointLights * 32 + kMaxSpotLights * 48, "FrameData must match the std140 block in frame.glslh");
+static_assert(sizeof(FrameData) == 3 * 64 + 7 * 16 + kMaxPointLights * 32 + kMaxSpotLights * 48 + 64 + 16, "FrameData must match the std140 block in frame.glslh");
 
 // Per-frame counters, shown in the window title.
 struct FrameStats {
@@ -81,7 +84,9 @@ private:
 	void CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass);   // frustum test, then fill the opaque / transparent / shadow-caster lists
 	void CreateShadowMap();
 	void UpdateShadowMatrix();
-	void RenderShadowPass();
+	void FitShadowCascade(int cascade, const Vector3& forward, float halfSize);
+	void RenderShadowPass();                   // draws every cascade
+	void RenderShadowCascade(int cascade);     // one depth pass into one layer of the shadow array
 	void SortNodeLists();
 	void ClearNodeLists();
 	void DrawNodes(const std::vector<SceneObject*>& list);
@@ -220,8 +225,9 @@ private:
 	Frustum cullFrustum;
 	bool    cullingFrozen = false;
 
-	// Sun shadow: one orthographic depth map that follows the camera
-	Frustum                   shadowFrustum;
+	// Sun shadow: two cascades (0 = near and sharp, 1 = far and wide), each an orthographic depth map that follows the camera
+	static const int          kShadowCascades = 2;
+	Frustum                   shadowFrustum[kShadowCascades];
 	std::vector<SceneObject*> shadowCasterList;
 	std::unique_ptr<Shader>   shadowShader;
 	GLuint  shadowFBO = 0;
@@ -241,8 +247,8 @@ private:
 	void   EndGpuTimer();
 	void   ReadGpuTimers();
 	GLuint  shadowTex = 0;
-	Matrix4 shadowView, shadowProj;
-	float   shadowTexelWorld = 0.0f;   // world size of one shadow texel
+	Matrix4 shadowView[kShadowCascades], shadowProj[kShadowCascades];
+	float   shadowTexelWorld[kShadowCascades] = {};   // world size of one shadow texel, per cascade
 	bool    shadowsEnabled = true;     // H toggles
 	Vector3 sunDirection;              // unit vector towards the sun
 

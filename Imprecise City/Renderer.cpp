@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <iostream>
 #include <map>
@@ -1166,11 +1167,16 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 void Renderer::UploadFrameData() {
 	frameData.viewMatrix      = viewMatrix;
 	frameData.projMatrix      = projMatrix;
-	frameData.shadowViewProj  = shadowProj * shadowView;
+	frameData.shadowViewProj  = shadowProj[0] * shadowView[0];    // near cascade
+	frameData.shadowViewProj2 = shadowProj[1] * shadowView[1];    // far cascade
 	frameData.cameraPos       = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
 	frameData.timeInfo        = Vector4(elapsedSeconds, 0.0f, 0.0f, 0.0f);
 	// x = size of one shadow-map texel in UV units, y = depth bias, z = normal offset in world units, w = on/off
-	frameData.shadowParams    = Vector4(1.0f / kShadowMapSize, kShadowDepthBias, 1.5f * shadowTexelWorld, shadowsEnabled ? 1.0f : 0.0f);
+	// The far cascade's values live in shadowParams (as the single map's did); the near cascade's in shadowCascade.
+	// A near texel is smaller, so its depth bias shrinks with it (never below 40%).
+	const float nearBias = kShadowDepthBias * std::min(std::max(shadowTexelWorld[0] / std::max(shadowTexelWorld[1], 0.001f), 0.4f), 1.0f);
+	frameData.shadowParams    = Vector4(1.0f / kShadowMapSize, kShadowDepthBias, 1.5f * shadowTexelWorld[1], shadowsEnabled ? 1.0f : 0.0f);
+	frameData.shadowCascade   = Vector4(1.5f * shadowTexelWorld[0], nearBias, 0.0f, 0.0f);
 
 	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameData), &frameData);
@@ -1207,47 +1213,57 @@ void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 	}
 }
 
-// Fits an orthographic "sun camera" around the area in front of the viewer.
+// Fits two orthographic "sun cameras" around the area in front of the viewer: a wide one (cascade 1,
+// as the single shadow map used to be) and a small one (cascade 0) right around the viewer. The small one
+// has several times more shadow texels per metre, so near shadows are sharp and thin things (a walker's
+// limbs) stop shimmering.
 void Renderer::UpdateShadowMatrix() {
 	// The camera's forward vector is minus the third row of the view matrix's rotation.
 	const Vector3 forward(-viewMatrix.values[2], -viewMatrix.values[6], -viewMatrix.values[10]);
 
-	// Bigger box when the camera is high (overview shots); stepped, so it does not change every frame.
-	const float halfSize = std::min(700.0f, 90.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
+	// Bigger far box when the camera is high (overview shots); stepped, so it does not change every frame.
+	const float farHalf  = std::min(700.0f, 90.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
+	const float nearHalf = std::min(std::max(farHalf * 0.3f, 28.0f), 150.0f);
+	FitShadowCascade(1, forward, farHalf);
+	FitShadowCascade(0, forward, nearHalf);
+}
+
+void Renderer::FitShadowCascade(int cascade, const Vector3& forward, float halfSize) {
 	const Vector3 focus    = eyePosition + forward * (halfSize * 0.6f);
 	const Vector3 lightEye = focus + sunDirection * kShadowLightDistance;
 	const Vector3 up       = std::fabs(sunDirection.y) > 0.99f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
 
-	shadowView       = Matrix4::BuildViewMatrix(lightEye, focus, up);
-	shadowTexelWorld = 2.0f * halfSize / kShadowMapSize;
+	shadowView[cascade]       = Matrix4::BuildViewMatrix(lightEye, focus, up);
+	shadowTexelWorld[cascade] = 2.0f * halfSize / kShadowMapSize;
 
 	// Texel snapping: round the light-space origin to a whole number of shadow texels. Without
 	// this the shadow map slides by sub-texel amounts as the camera moves, and shadow edges shimmer.
-	shadowView.values[12] = std::floor(shadowView.values[12] / shadowTexelWorld + 0.5f) * shadowTexelWorld;
-	shadowView.values[13] = std::floor(shadowView.values[13] / shadowTexelWorld + 0.5f) * shadowTexelWorld;
+	const float texel = shadowTexelWorld[cascade];
+	shadowView[cascade].values[12] = std::floor(shadowView[cascade].values[12] / texel + 0.5f) * texel;
+	shadowView[cascade].values[13] = std::floor(shadowView[cascade].values[13] / texel + 0.5f) * texel;
 
-	shadowProj = Matrix4::Orthographic(1.0f, kShadowLightDistance * 2.0f, halfSize, -halfSize, halfSize, -halfSize);
-	shadowFrustum.FromMatrix(shadowProj * shadowView);
+	shadowProj[cascade] = Matrix4::Orthographic(1.0f, kShadowLightDistance * 2.0f, halfSize, -halfSize, halfSize, -halfSize);
+	shadowFrustum[cascade].FromMatrix(shadowProj[cascade] * shadowView[cascade]);
 }
 
 // A depth-only texture the sun renders into. Hardware depth comparison (REF_TO_TEXTURE) lets
 // the fragment shader ask "is this point in shadow?" and get a filtered answer back.
 void Renderer::CreateShadowMap() {
 	glGenTextures(1, &shadowTex);
-	glBindTexture(GL_TEXTURE_2D, shadowTex);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowMapSize, kShadowMapSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, shadowTex);   // one layer per cascade
+	glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT24, kShadowMapSize, kShadowMapSize, kShadowCascades, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
 	const float border[4] = { 1.0f, 1.0f, 1.0f, 1.0f };   // outside the map counts as "nothing in the way"
-	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+	glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, border);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+	glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
 
 	glGenFramebuffers(1, &shadowFBO);
 	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowTex, 0);
+	glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, shadowTex, 0, 0);   // layer 0 for the completeness check; each pass picks its own layer
 	glDrawBuffer(GL_NONE);   // depth only: no colour attachment
 	glReadBuffer(GL_NONE);
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -1257,12 +1273,30 @@ void Renderer::CreateShadowMap() {
 }
 
 void Renderer::RenderShadowPass() {
-	StartDebugGroup("Shadow pass");
+	for (int cascade = 0; cascade < kShadowCascades; ++cascade) {
+		RenderShadowCascade(cascade);
+	}
+
+	// The shadow vertex shaders read 'shadowViewProj' from the frame UBO, so each cascade pass wrote its
+	// own matrix into that slot. Put the near cascade's back, where the lit shaders expect it.
+	const Matrix4 nearMatrix = shadowProj[0] * shadowView[0];
+	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
+	glBufferSubData(GL_UNIFORM_BUFFER, offsetof(FrameData, shadowViewProj), sizeof(Matrix4), nearMatrix.values);
+}
+
+void Renderer::RenderShadowCascade(int cascade) {
+	StartDebugGroup(cascade == 0 ? "Shadow pass (near cascade)" : "Shadow pass (far cascade)");
 
 	shadowCasterList.clear();
-	CullNodes(root.get(), shadowFrustum, true);
+	CullNodes(root.get(), shadowFrustum[cascade], true);
+
+	// Make the shadow shaders place vertices with THIS cascade's matrix.
+	const Matrix4 cascadeMatrix = shadowProj[cascade] * shadowView[cascade];
+	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
+	glBufferSubData(GL_UNIFORM_BUFFER, offsetof(FrameData, shadowViewProj), sizeof(Matrix4), cascadeMatrix.values);
 
 	glBindFramebuffer(GL_FRAMEBUFFER, shadowFBO);
+	glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, shadowTex, 0, cascade);   // draw into this cascade's layer
 	glViewport(0, 0, kShadowMapSize, kShadowMapSize);
 	glClear(GL_DEPTH_BUFFER_BIT);
 
@@ -1475,7 +1509,7 @@ void Renderer::RenderScene() {
 
 	// The shadow map lives on texture unit 4 for the whole main pass (see lighting.glslh).
 	glActiveTexture(GL_TEXTURE4);
-	glBindTexture(GL_TEXTURE_2D, shadowTex);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, shadowTex);
 	glActiveTexture(GL_TEXTURE5);   // the environment cube map lives on unit 5 (see carFragment.glsl)
 	glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
 	glActiveTexture(GL_TEXTURE6);   // island heights for the sea's shoreline foam (see water.glslh)

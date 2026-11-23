@@ -18,14 +18,17 @@ struct SpotLight {
 layout(std140, binding = 0) uniform FrameData {
 	mat4 viewMatrix;
 	mat4 projMatrix;
-	mat4 shadowViewProj;   // world space -> sun clip space
+	mat4 shadowViewProj;   // world space -> sun clip space, NEAR cascade (during the shadow passes: the cascade being drawn)
 	vec4 cameraPos;        // xyz = world position
 	vec4 sunDir;           // xyz = unit vector pointing TOWARDS the sun, w = intensity
 	vec4 sunColour;        // rgb
 	vec4 fogColour;        // rgb, w = fog density
 	vec4 timeInfo;         // x = seconds since start
-	vec4 shadowParams;     // x = 1 / shadow map size, y = depth bias, z = normal offset (world units), w = shadows on
+	vec4 shadowParams;     // x = 1 / shadow map size, y = depth bias (far cascade), z = normal offset in world units (far cascade), w = shadows on
 	vec4 environment;      // x = night factor (0 day .. 1 night), y = point lights in use, z = spot lights in use, w = ambient scale
 	PointLight pointLights[MAX_POINT_LIGHTS];   // street lamps nearest the camera
 	SpotLight  spotLights[MAX_SPOT_LIGHTS];     // car headlights
+	// Second shadow cascade. Appended at the END so every offset above is unchanged.
+	mat4 shadowViewProj2;  // world space -> sun clip space, FAR cascade
+	vec4 shadowCascade;    // x = normal offset in world units (near cascade), y = depth bias (near cascade)
 };
