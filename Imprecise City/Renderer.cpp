@@ -23,7 +23,6 @@ namespace {
 	}
 	Vector3 Mix(const Vector3& a, const Vector3& b, float t) { return a + (b - a) * t; }
 
-	// Cinematic shots: how long each plays (seconds).
 	const float kShotLength[14] = { 12.0f, 12.0f, 12.0f, 9.0f, 12.0f, 7.0f, 8.0f, 8.0f, 10.0f, 9.0f, 11.0f, 7.0f, 8.0f, 9.0f };   // 134 s in total
 	const bool  kShotNeedsCity[14] = { false, false, true, false, true, true, false, false, false, false, true, false, false, false };
 
@@ -32,11 +31,9 @@ namespace {
 
 	float MixF(float a, float b, float t) { return a + (b - a) * t; }
 
-	// Time-of-day presets (hours) the T key cycles through.
 	const float kTimePresets[5]  = { 12.0f, 16.5f, 18.4f, 0.0f, 6.2f };
 	const char* kTimePresetName[5] = { "noon", "afternoon", "dusk", "midnight", "dawn" };
 
-	// Seasons. Each row is what the weather moves towards: wetness, snow cover, autumn colour, rainfall, snowfall, overcast (all 0..1).
 	const int   kSeasonCount = 5;
 	const char* kSeasonName[kSeasonCount] = { "rain", "summer", "autumn", "winter", "spring" };
 	const float kSeasonTarget[kSeasonCount][6] = {
@@ -46,9 +43,8 @@ namespace {
 		{ 0.10f, 1.0f, 0.0f, 0.00f, 1.0f, 0.55f },   // winter: snow cover and snowfall
 		{ 0.55f, 0.0f, 0.0f, 0.35f, 0.0f, 0.25f }    // spring: showers
 	};
-	const float kSeasonSeconds = 144.0f;   // one in-scene day (the clock runs a whole day in 144 s); change to 288 for two days per season
+	const float kSeasonSeconds = 144.0f;   // one in-scene day
 
-	// Cinematic camera tuning
 	const float kCarSpeed      = 20.0f;   // metres per second
 	const float kPlayerLane    = 2.6f;    // the player drives in the right-hand lane, like the traffic
 	const float kCamBehind     = 16.0f;
@@ -56,17 +52,14 @@ namespace {
 	const float kLookAhead     = 12.0f;
 	const float kLookHeight    = 1.5f;
 
-	// Free-camera fly speed: held left / right mouse button ramps it at runtime.
 	const float kFlySpeedRate = 1.0f;    // e-fold per second of holding (right = faster, left = slower)
 	const float kFlySpeedMin  = 0.05f;   // slowest (fine placement)
 	const float kFlySpeedMax  = 20.0f;   // fastest (overview shots)
 
-	// Shadow map tuning
 	const int   kShadowMapSize      = 2048;
 	const float kShadowLightDistance = 800.0f;   // how far from the focus point the sun camera sits
 	const float kShadowDepthBias    = 0.0001f;   // in 0..1 depth units (range is 2 x light distance)
 
-	// nclgl convention: yaw 0 looks down -Z, positive pitch looks up.
 	float YawFromDirection(const Vector3& f) {
 		return std::atan2(-f.x, -f.z) * kRadToDeg;
 	}
@@ -78,22 +71,18 @@ namespace {
 Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	const auto startTime = std::chrono::steady_clock::now();
 
-	// World: the road needs the natural terrain height, then the terrain is carved around the road.
 	const std::vector<Vector3> roadControlPoints = {
 		Vector3(-470, 0,  260), Vector3(-330, 0,  250), Vector3(-370, 0,   90),
 		Vector3(-210, 0,  -10), Vector3( -40, 0,  120), Vector3( 130, 0,   40),
 		Vector3( 200, 0, -140), Vector3(  60, 0, -260), Vector3( -90, 0, -330),
-		// the way back round the west side, so the road is a closed loop
 		Vector3(-260, 0, -350), Vector3(-430, 0, -240), Vector3(-530, 0,  -70), Vector3(-535, 0,  110)
 	};
 	road = std::make_unique<RoadPath>(roadControlPoints, 4.0f, true);
 	road->SnapToTerrain(&Terrain::IslandHeight, 10.0f, 8, 10);
 
-	// The city goes on the flattest land the road passes: level the road and the ground there first.
 	Vector3 cityCentre;
 	float   cityRoadDistance = 0.0f;
 	TerrainPlateau plateau;
-	// Try a big flat site first, then settle for smaller ring checks if the coast is in the way.
 	bool cityFound = false;
 	for (float scale : { 1.0f, 0.8f, 0.6f }) {
 		cityFound = City::ChooseSite(*road, &Terrain::IslandHeight, CityConst::kPlateauInner * scale, cityCentre, cityRoadDistance);
@@ -110,7 +99,6 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	FindShores();
 	roadSegments = road->BuildRibbonSegments(5.0f, 0.15f, 8.0f, 48);   // 48 samples = 192 m per piece, so the road can be culled
 
-	// Placeholder car body: a smooth rounded box (so reflections look right), 2 x 1.1 x 4.4 m.
 	carMesh.reset(BuildRoundedBox(Vector3(1.0f, 0.55f, 2.2f), 0.35f, 24, 48));
 	seaMesh.reset(Mesh::GenerateQuad());   // also used as the full-screen quad for the sky
 
@@ -132,7 +120,6 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	skyShader     = std::make_unique<Shader>("skyVertex.glsl", "skyFragment.glsl");
 	bakeSkyShader = std::make_unique<Shader>("bakeSkyVertex.glsl", "bakeSkyFragment.glsl");
 
-	// Debug overlay (O / K / I); the scene runs without it.
 	overlay = std::make_unique<DebugOverlay>();
 	if (!overlay->Create(height)) {
 		std::cout << "Renderer: debug overlay unavailable (see messages above).\n";
@@ -164,7 +151,6 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 	if (cityFound) {
 		BuildCity(cityCentre, cityRoadDistance);
 
-		// Start the drive about 450 m before the city, so the opening is the winding approach into town.
 		const float length = road->GetLength();
 		carDistance = cityRoadDistance - 450.0f;
 		carDistance -= std::floor(carDistance / length) * length;
@@ -190,7 +176,6 @@ Renderer::Renderer(Window& parent) : OGLRenderer(parent) {
 		for (int i = 0; i < 6; ++i) { *state[i] = kSeasonTarget[season][i]; }
 	}
 
-	// Sun, sky and fog come from the time of day (starts at noon).
 	ApplyTimeOfDay();
 	BuildEnvironmentMap();   // needs the frame UBO and the sun / fog values above
 	lastBakedHour = timeOfDay;
@@ -244,7 +229,6 @@ void Renderer::ReadGpuTimers() {
 		gpuMs[p] = gpuMs[p] * 0.9f + (float)(ns * 1e-6) * 0.1f;   // smooth so the numbers are readable
 	}
 
-	// Whole frame: end stamp minus start stamp, in nanoseconds.
 	GLuint64 first = 0, last = 0;
 	glGetQueryObjectui64v(frameStamps[previous][0], GL_QUERY_RESULT, &first);
 	glGetQueryObjectui64v(frameStamps[previous][1], GL_QUERY_RESULT, &last);
@@ -253,17 +237,6 @@ void Renderer::ReadGpuTimers() {
 	}
 }
 
-// The scene graph:
-//   root
-//   +-- terrain (group, no mesh)
-//   |     +-- 64 terrain chunks (each with its own bounding sphere)
-//   +-- road
-//   +-- car
-//   +-- walkers (skinned, animated people; see BuildWalkers)
-//   +-- sea (transparent list)
-// Only nodes with a mesh are drawn or culled; groups exist to share one parent transform.
-// Samples the carved terrain into a 512x512 float texture. The sea shader uses it to place foam
-// and shallow-water tint on the water side of the shoreline.
 void Renderer::BuildShoreTexture() {
 	const int   size   = 512;
 	const float extent = terrain->GetHalfExtent();
@@ -298,8 +271,6 @@ void Renderer::BuildScene() {
 		terrainGroup->AddChild(node);
 	}
 
-	// The road is cut into ~192 m pieces; each is its own node with its own bounding sphere, so
-	// pieces behind the camera are culled like terrain chunks.
 	for (const RoadPath::RibbonSegment& segment : roadSegments) {
 		SceneObject* roadNode = new SceneObject(segment.mesh.get(), Material::Road);
 		roadNode->SetTransform(Matrix4::Translation(segment.centre));
@@ -308,12 +279,10 @@ void Renderer::BuildScene() {
 		root->AddChild(roadNode);
 	}
 
-	// Reflective paint (Material::Car). The mesh already has the car's proportions. Transform set every frame.
 	carNode = new SceneObject(carMesh.get(), Material::Car, Vector4(0.55f, 0.10f, 0.55f, 1.0f));   // purple
 	carNode->SetBoundingRadius(3.0f);
 	root->AddChild(carNode);
 
-	// The sea quad is rotated flat and scaled huge; it lives in the transparent list.
 	SceneObject* seaNode = new SceneObject(seaMesh.get(), Material::Sea, Vector4(1, 1, 1, 1), true);
 	seaNode->SetTransform(Matrix4::Rotation(-90.0f, Vector3(1, 0, 0)));
 	seaNode->SetModelScale(Vector3(8000.0f, 8000.0f, 1.0f));
@@ -331,19 +300,14 @@ void Renderer::CreateWhiteTexture() {
 	glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// Renders the analytic sky (sky.glslh) into the six faces of a cube map. Reflective objects
-// sample it, so what they mirror is exactly what is drawn behind the scene. Runs once at
-// start-up; when time of day changes the sun, call it again.
 void Renderer::BuildEnvironmentMap() {
 	const int size = 128;
 	StartDebugGroup("Bake environment map");
 
 	if (!envCube) {
-		// Allocate the cube map and framebuffer once; later bakes only re-render its faces.
 		glGenTextures(1, &envCube);
 		glBindTexture(GL_TEXTURE_CUBE_MAP, envCube);
 		for (int face = 0; face < 6; ++face) {
-			// 16-bit float, so the bright sun disc keeps values above 1 for reflections
 			glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA16F, size, size, 0, GL_RGBA, GL_FLOAT, nullptr);
 		}
 		glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -379,8 +343,6 @@ void Renderer::BuildEnvironmentMap() {
 	EndDebugGroup();
 }
 
-// Draws the sky last among the opaque things: depth test LEQUAL with the quad at depth 1.0 means
-// only pixels nothing else covered get shaded, so no fragment work is wasted behind the scene.
 void Renderer::DrawSky() {
 	glDisable(GL_POLYGON_OFFSET_FILL);
 	glDepthFunc(GL_LEQUAL);
@@ -399,23 +361,19 @@ void Renderer::DrawSky() {
 	materialBound = false;
 }
 
-// A few CesiumMan instances strolling along the road verge.
 void Renderer::BuildWalkers() {
 	walkerModel = std::make_unique<AnimatedModel>();
-	// Z-up model, ~1.5 units tall: scale 1.2 makes a 1.8 m person.
 	if (!walkerModel->Load("../GLTF/CesiumMan/CesiumMan.gltf", AnimatedModel::ZUpFix(1.2f))) {
 		std::cout << "Renderer: walkers disabled (copy the GLTF folder next to the solution, see HANDOFF.md)\n";
 		walkerModel.reset();
 		return;
 	}
 
-	// Spread along the road with a long stretch each way, so they rarely reverse on camera.
 	const int   kWalkerCount = 5;
 	const float startDistance[kWalkerCount] = { 90.0f, 330.0f, 560.0f, 800.0f, 1050.0f };
 	const float duration = walkerModel->ClipDuration(0);
 
 	for (int i = 0; i < kWalkerCount; ++i) {
-		// Different start times, so the walkers are not in lock-step.
 		SkinnedObject* node = new SkinnedObject(walkerModel.get(), 0, duration * 0.27f * i, 1.0f);
 		root->AddChild(node);
 
@@ -444,7 +402,6 @@ void Renderer::UpdateWalkers(float dt) {
 		const float len = std::sqrt(along.x * along.x + along.z * along.z);
 		along = along * (1.0f / len);
 
-		// "Right of the road" for a road heading along -Z at yaw 0 is +X: right = (-z, 0, x).
 		const float px = centre.x + (-along.z) * w.side;
 		const float pz = centre.z + ( along.x) * w.side;
 		const float py = terrain->HeightAt(px, pz);
@@ -456,8 +413,6 @@ void Renderer::UpdateWalkers(float dt) {
 	}
 }
 
-// Moves the weather towards the current season's targets (about 4 seconds to blend), and, in automatic
-// mode, moves on to the next season after kSeasonSeconds. Everything else just reads the smoothed values.
 void Renderer::UpdateSeason(float dt) {
 	if (seasonAuto) {
 		seasonTimer += dt;
@@ -474,8 +429,6 @@ void Renderer::UpdateSeason(float dt) {
 	}
 }
 
-// 0 = off, 1 = on, 2 = adaptive (a late frame tears instead of waiting for the next refresh).
-// nclgl sets no swap interval, so without this the driver's setting decides.
 void Renderer::ApplyVSync() {
 	typedef BOOL (WINAPI* SwapIntervalFn)(int);
 	static SwapIntervalFn swapInterval = reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"));
@@ -489,9 +442,6 @@ void Renderer::ApplyVSync() {
 	if (vsyncMode == 0) { swapInterval(0); }
 }
 
-// Sun, moon, sky and fog for the current hour. The sun travels east -> west over a tilted arc;
-// when it is below the horizon the same light slot becomes a dim blue moon (its mirror image), so
-// shadows and lighting keep working at night. Everything is a blend of three palettes: day, dusk, night.
 void Renderer::ApplyTimeOfDay() {
 	const float theta = (timeOfDay - 6.0f) / 12.0f * kPi;   // 0 at 06:00 (sunrise), pi at 18:00 (sunset)
 	Vector3 sun(std::cos(theta), std::sin(theta) * 0.75f, 0.5f);
@@ -521,7 +471,6 @@ void Renderer::ApplyTimeOfDay() {
 		lightDirection = Vector3(-sun.x, -sun.y, sun.z);   // the moon: mirror of the sun, above the horizon
 	}
 
-	// Overcast (rain, autumn drizzle, winter): the sky and fog go grey and thicker, and the sun weakens.
 	if (overcast > 0.001f) {
 		const float grey = 0.299f * fog.x + 0.587f * fog.y + 0.114f * fog.z;
 		fog     = Mix(fog,    Vector3(grey * 0.80f, grey * 0.84f, grey * 0.90f), overcast * 0.85f);
@@ -544,9 +493,6 @@ void Renderer::ApplyTimeOfDay() {
 	glClearColor(fog.x, fog.y, fog.z, 1.0f);
 }
 
-// Picks the lights for this frame. Street lamps: only the 8 nearest the camera are sent to the GPU
-// (the fragment shaders loop over a short list, never over every lamp on the island).
-// Headlights: two spot lights on the player's car. Both switch on as it gets dark.
 void Renderer::UpdateLights() {
 	const float night   = frameData.environment.x;
 	const float lampsOn = std::min(std::max((night - 0.2f) * 3.0f, 0.0f), 1.0f);
@@ -596,8 +542,6 @@ void Renderer::UpdateLights() {
 	frameData.environment.z = static_cast<float>(spotCount);
 }
 
-// Turns the city's instance list into districts: instances are bucketed into 192 m cells, each cell
-// gets one shader storage buffer and one scene node (own bounding sphere, so it can be culled).
 void Renderer::BuildCity(const Vector3& centre, float roadDistance) {
 	city = std::make_unique<City>();
 	city->Generate(*road, centre, roadDistance);
@@ -606,9 +550,6 @@ void Renderer::BuildCity(const Vector3& centre, float roadDistance) {
 	AddInstancedPatches(city->GetInstances(), unitBox.get(), Material::Building);
 }
 
-// Sorts instances into 192 m grid cells and makes one scene node ("patch") per cell: its own
-// instance buffer, one instanced draw, and a bounding sphere, so patches outside the view (or the
-// sun's shadow box) are culled exactly like terrain chunks. Used for buildings, trees and roofs.
 void Renderer::AddInstancedPatches(const std::vector<CityInstance>& all, ProceduralMesh* mesh, Material material) {
 	if (all.empty()) {
 		return;
@@ -652,7 +593,6 @@ void Renderer::AddInstancedPatches(const std::vector<CityInstance>& all, Procedu
 	std::cout << "Patches: " << all.size() << " instances in " << buckets.size() << " patches\n";
 }
 
-// Trees and the village. Outskirts.h makes the instance lists; each list becomes culled patches.
 void Renderer::BuildOutskirts() {
 	std::vector<CityInstance> pines, broadleaf, houses, roofs;
 	Outskirts::Generate(*road, *terrain, hasCity, cityCentre, pines, broadleaf, houses, roofs);
@@ -670,8 +610,6 @@ void Renderer::BuildOutskirts() {
 	AddInstancedPatches(roofs,     roofMesh.get(),     Material::Building);
 }
 
-// A handful of other cars driving the loop: some with the road's direction (right-hand lane),
-// some against it, at different speeds, in different paint.
 void Renderer::BuildTraffic() {
 	const int   kCount = 8;
 	const Vector4 paint[kCount] = {
@@ -685,7 +623,6 @@ void Renderer::BuildTraffic() {
 		node->SetBoundingRadius(3.0f);
 		root->AddChild(node);
 
-		// Same-lane cars share the player's speed (a convoy); oncoming cars share a slower one.
 		const float convoyStart[kCount / 2] = { 90.0f, 260.0f, 700.0f, 1500.0f };
 		const bool  withPlayer = (i % 2 == 0);
 
@@ -718,8 +655,6 @@ void Renderer::UpdateTraffic(float dt) {
 	}
 }
 
-// ---- Cinematic director ---------------------------------------------------------------------
-
 void Renderer::GetCarFrame(Vector3& position, Vector3& forward, Vector3& right) const {
 	forward  = road->DirectionAt(carDistance);
 	right    = Vector3(-forward.z, 0.0f, forward.x);
@@ -732,8 +667,6 @@ void Renderer::StartShot(int index) {
 	shotStartCarDistance = carDistance;
 }
 
-// Back in auto mode: carry on with the first shot the viewer has not seen yet. When everything has
-// been seen the list starts over.
 void Renderer::ResumeDirector() {
 	int next = -1;
 	for (int i = 0; i < kShotCount; ++i) {
@@ -762,7 +695,6 @@ void Renderer::UpdateCinematicCamera(float dt) {
 		StartShot(next);
 	}
 
-	// Cut through black: fade in over the first 0.4 s of a shot, out over the last 0.4 s.
 	const float length = kShotLength[shotIndex];
 	fade = std::max(1.0f - shotTime / 0.4f, 1.0f - (length - shotTime) / 0.4f);
 	fade = std::min(std::max(fade, 0.0f), 1.0f);
@@ -771,7 +703,6 @@ void Renderer::UpdateCinematicCamera(float dt) {
 	viewMatrix = Matrix4::BuildViewMatrix(eyePosition, lookTarget);
 }
 
-// The camera moves. t = seconds since the shot started.
 void Renderer::EvaluateShot(int index, float t, Vector3& eye, Vector3& target, float& fov) const {
 	fov = 60.0f;
 	Vector3 carPos, fwd, right;
@@ -879,10 +810,6 @@ void Renderer::EvaluateShot(int index, float t, Vector3& eye, Vector3& target, f
 	}
 }
 
-// ---- Post-processing ------------------------------------------------------------------------
-
-// The scene renders into a float target so lights can exceed 1.0 and bloom can find them.
-// R11G11B10F stores values above 1 at 32 bits per pixel; bloom runs at quarter resolution.
 void Renderer::CreatePostTargets() {
 	DestroyPostTargets();
 
@@ -938,7 +865,6 @@ void Renderer::DestroyPostTargets() {
 	}
 }
 
-// R: render at 100%, 85% or 70% of the window size; the composite pass scales it back up.
 void Renderer::CycleRenderScale() {
 	renderScaleIndex = (renderScaleIndex + 1) % 3;
 	CreatePostTargets();
@@ -951,7 +877,6 @@ void Renderer::RenderPostProcessing() {
 	glDisable(GL_DEPTH_TEST);
 
 	if (bloomEnabled) {
-		// 1. Bright pass: HDR scene -> quarter-size texture holding only the very bright parts.
 		glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO[0]);
 		glViewport(0, 0, bloomWidth, bloomHeight);
 		Use(*brightShader);
@@ -960,7 +885,6 @@ void Renderer::RenderPostProcessing() {
 		glUniform2f(glGetUniformLocation(activeProgram, "texelSize"), 1.0f / sceneWidth, 1.0f / sceneHeight);
 		seaMesh->Draw();
 
-		// 2. Blur: horizontal then vertical, twice (ping-pong between the two bloom textures).
 		Use(*blurShader);
 		const GLint directionLoc = glGetUniformLocation(activeProgram, "direction");
 		for (int pass = 0; pass < 2; ++pass) {
@@ -976,7 +900,6 @@ void Renderer::RenderPostProcessing() {
 		}
 	}
 
-	// 3. Composite to the screen (this is also where a reduced render scale is scaled back up).
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	glViewport(0, 0, width, height);
 	Use(*compositeShader);
@@ -1010,8 +933,6 @@ GLuint Renderer::LoadTexture(const std::string& fileName) {
 	}
 	SetTextureRepeating(tex, true);
 
-	// Anisotropic filtering: stops textures smearing at grazing angles (the "smudged" grass and
-	// road edges). 0x84FE / 0x84FF are GL_TEXTURE_MAX_ANISOTROPY(_EXT) / GL_MAX_TEXTURE_MAX_ANISOTROPY(_EXT).
 	GLfloat maxAnisotropy = 1.0f;
 	glGetFloatv(0x84FF, &maxAnisotropy);
 	glBindTexture(GL_TEXTURE_2D, tex);
@@ -1031,8 +952,6 @@ void Renderer::UpdateScene(float /*dt*/) {
 	float dt          = std::min(rawDt, 0.1f);                                  // the simulation never jumps by more than 0.1 s
 	lastTick = now;
 
-	// Hold still (screen black) for the first couple of seconds, so a screen recording can start
-	// before anything moves and without the first frames of start-up showing.
 	if (startupTimer < kStartDelay) {
 		startupTimer += rawDt;
 		dt = 0.0f;
@@ -1103,7 +1022,6 @@ void Renderer::UpdateScene(float /*dt*/) {
 }
 
 void Renderer::UpdateCar(float dt) {
-	// The road is a closed loop, so the distance just wraps: no jump, no restart.
 	carDistance += kCarSpeed * dt;
 	if (carDistance > road->GetLength()) {
 		carDistance -= road->GetLength();
@@ -1119,7 +1037,6 @@ void Renderer::UpdateCar(float dt) {
 }
 
 void Renderer::UpdateFreeCamera(float dt) {
-	// Held left / right mouse button ramps the fly speed exponentially, clamped to a usable range.
 	auto* mouse = Window::GetMouse();
 	if (mouse->ButtonDown(MOUSE_LEFT))  { freeCameraSpeed *= std::exp(-kFlySpeedRate * dt); }
 	if (mouse->ButtonDown(MOUSE_RIGHT)) { freeCameraSpeed *= std::exp( kFlySpeedRate * dt); }
@@ -1127,7 +1044,6 @@ void Renderer::UpdateFreeCamera(float dt) {
 
 	camera.UpdateCamera(dt * 1000.0f * freeCameraSpeed);   // nclgl camera takes milliseconds
 
-	// Stay above the ground and the sea.
 	Vector3 p = camera.GetPosition();
 	const float minY = std::max(terrain->HeightAt(p.x, p.z), 0.0f) + 2.0f;
 	if (p.y < minY) {
@@ -1142,7 +1058,6 @@ void Renderer::UpdateFreeCamera(float dt) {
 void Renderer::SwitchCameraMode() {
 	const CameraMode previous = cameraMode;
 	if (previous == CameraMode::Drive) {
-		// Hand the current chase pose to the free camera so there is no jump.
 		Vector3 f = lookTarget - eyePosition;
 		const float len = std::sqrt(f.x * f.x + f.y * f.y + f.z * f.z);
 		f = f * (1.0f / len);
@@ -1163,8 +1078,6 @@ void Renderer::SwitchCameraMode() {
 	std::cout << "Camera: " << (cameraMode == CameraMode::Drive ? "drive" : cameraMode == CameraMode::Free ? "free" : "trailer") << "\n";
 }
 
-// Walks outwards-in along two rays from the island centre and remembers where the land first rises
-// above the waterline; the beach and sea shots are built around these two points.
 void Renderer::FindShores() {
 	const float angles[2] = { 0.9f, 3.9f };
 	for (int k = 0; k < 2; ++k) {
@@ -1180,7 +1093,6 @@ void Renderer::FindShores() {
 }
 
 void Renderer::UpdateWindowTitle(float frameTime) {
-	// Lifetime min/max/average skip the first seconds, which are dominated by start-up hitches.
 	if (elapsedSeconds > 3.0f) {
 		++fpsFrames;
 		fpsTotalTime += frameTime;
@@ -1201,7 +1113,6 @@ void Renderer::UpdateWindowTitle(float frameTime) {
 	displayAvg = (float)average;
 	displayLow = (float)low;
 
-	// Short title; the detailed stats live in the overlay (O).
 	char title[128];
 	if (cameraMode == CameraMode::Free) {
 		std::snprintf(title, sizeof(title), "Imprecise City | %.0f fps | fly speed %.2f | O = overlay, K = keys", displayFps, freeCameraSpeed);
@@ -1222,9 +1133,7 @@ void Renderer::UploadFrameData() {
 	frameData.shadowViewProj  = shadowProj[0] * shadowView[0];    // near cascade
 	frameData.shadowViewProj2 = shadowProj[1] * shadowView[1];    // far cascade
 	frameData.cameraPos       = Vector4(eyePosition.x, eyePosition.y, eyePosition.z, 1.0f);
-	frameData.timeInfo        = Vector4(elapsedSeconds, wetness, snowCover, autumnAmount);   // y wetness, z snow cover, w autumn colour (see the terrain / tree / building shaders)
-	// shadowParams: x = texel size in UV, y = far depth bias, z = far normal offset, w = on/off.
-	// shadowCascade holds the near cascade's offset and a depth bias scaled to its smaller texels.
+	frameData.timeInfo        = Vector4(elapsedSeconds, wetness, snowCover, autumnAmount);   // y wetness, z snow cover, w autumn colour
 	const float nearBias = kShadowDepthBias * std::min(std::max(shadowTexelWorld[0] / std::max(shadowTexelWorld[1], 0.001f), 0.4f), 1.0f);
 	frameData.shadowParams    = Vector4(1.0f / kShadowMapSize, kShadowDepthBias, 1.5f * shadowTexelWorld[1], shadowsEnabled ? 1.0f : 0.0f);
 	frameData.shadowCascade   = Vector4(1.5f * shadowTexelWorld[0], nearBias, 0.0f, 0.0f);
@@ -1233,10 +1142,6 @@ void Renderer::UploadFrameData() {
 	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameData), &frameData);
 }
 
-// Walks the graph once and keeps every mesh node whose bounding sphere touches 'frustum'.
-// Main pass: survivors go into the opaque or transparent list (opposite sort orders).
-// Shadow pass: survivors that cast shadows go into the caster list, tested against the
-// light's frustum, so off-screen-for-the-sun terrain is not rendered into the shadow map.
 void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 	if (node->GetMesh()) {
 		SceneObject* object = static_cast<SceneObject*>(node);   // valid: see SceneObject.h
@@ -1251,7 +1156,6 @@ void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 			if (frustum.InsideFrustum(*node)) {
 				++stats.nodesDrawn;
 
-				// Squared distance is enough for ordering and skips the square root.
 				const Vector3 d = node->GetWorldTransform().GetPositionVector() - eyePosition;
 				node->SetCameraDistance(d.x * d.x + d.y * d.y + d.z * d.z);
 
@@ -1264,13 +1168,9 @@ void Renderer::CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass) {
 	}
 }
 
-// Fits two orthographic sun cameras around the view: a wide far cascade and a small near one.
-// The near cascade has more texels per metre, so close shadows stay sharp.
 void Renderer::UpdateShadowMatrix() {
-	// The camera's forward vector is minus the third row of the view matrix's rotation.
 	const Vector3 forward(-viewMatrix.values[2], -viewMatrix.values[6], -viewMatrix.values[10]);
 
-	// Bigger far box when the camera is high (overview shots); stepped, so it does not change every frame.
 	const float farHalf  = std::min(700.0f, 90.0f + 50.0f * std::floor(std::max(eyePosition.y, 0.0f) / 80.0f));
 	const float nearHalf = std::min(std::max(farHalf * 0.3f, 28.0f), 150.0f);
 	FitShadowCascade(1, forward, farHalf);
@@ -1285,8 +1185,6 @@ void Renderer::FitShadowCascade(int cascade, const Vector3& forward, float halfS
 	shadowView[cascade]       = Matrix4::BuildViewMatrix(lightEye, focus, up);
 	shadowTexelWorld[cascade] = 2.0f * halfSize / kShadowMapSize;
 
-	// Texel snapping: round the light-space origin to a whole number of shadow texels. Without
-	// this the shadow map slides by sub-texel amounts as the camera moves, and shadow edges shimmer.
 	const float texel = shadowTexelWorld[cascade];
 	shadowView[cascade].values[12] = std::floor(shadowView[cascade].values[12] / texel + 0.5f) * texel;
 	shadowView[cascade].values[13] = std::floor(shadowView[cascade].values[13] / texel + 0.5f) * texel;
@@ -1295,8 +1193,6 @@ void Renderer::FitShadowCascade(int cascade, const Vector3& forward, float halfS
 	shadowFrustum[cascade].FromMatrix(shadowProj[cascade] * shadowView[cascade]);
 }
 
-// A depth-only texture the sun renders into. Hardware depth comparison (REF_TO_TEXTURE) lets
-// the fragment shader ask "is this point in shadow?" and get a filtered answer back.
 void Renderer::CreateShadowMap() {
 	glGenTextures(1, &shadowTex);
 	glBindTexture(GL_TEXTURE_2D_ARRAY, shadowTex);   // one layer per cascade
@@ -1326,8 +1222,6 @@ void Renderer::RenderShadowPass() {
 		RenderShadowCascade(cascade);
 	}
 
-	// The shadow vertex shaders read 'shadowViewProj' from the frame UBO, so each cascade pass wrote its
-	// own matrix into that slot. Put the near cascade's back, where the lit shaders expect it.
 	const Matrix4 nearMatrix = shadowProj[0] * shadowView[0];
 	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
 	glBufferSubData(GL_UNIFORM_BUFFER, offsetof(FrameData, shadowViewProj), sizeof(Matrix4), nearMatrix.values);
@@ -1339,7 +1233,6 @@ void Renderer::RenderShadowCascade(int cascade) {
 	shadowCasterList.clear();
 	CullNodes(root.get(), shadowFrustum[cascade], true);
 
-	// Make the shadow shaders place vertices with THIS cascade's matrix.
 	const Matrix4 cascadeMatrix = shadowProj[cascade] * shadowView[cascade];
 	glBindBuffer(GL_UNIFORM_BUFFER, frameUBO);
 	glBufferSubData(GL_UNIFORM_BUFFER, offsetof(FrameData, shadowViewProj), sizeof(Matrix4), cascadeMatrix.values);
@@ -1349,7 +1242,6 @@ void Renderer::RenderShadowCascade(int cascade) {
 	glViewport(0, 0, kShadowMapSize, kShadowMapSize);
 	glClear(GL_DEPTH_BUFFER_BIT);
 
-	// Slope-scaled depth bias, so surfaces nearly parallel to the sun do not shadow themselves.
 	glEnable(GL_POLYGON_OFFSET_FILL);
 	glPolygonOffset(2.0f, 2.0f);
 
@@ -1424,8 +1316,6 @@ void Renderer::RenderShadowCascade(int cascade) {
 }
 
 void Renderer::SortNodeLists() {
-	// Opaque: group by material (fewest shader switches), then nearest first so the depth
-	// test rejects hidden fragments before the fragment shader runs (early-z).
 	std::sort(opaqueList.begin(), opaqueList.end(), [](const SceneObject* a, const SceneObject* b) {
 		if (a->GetMaterial() != b->GetMaterial()) {
 			return a->GetMaterial() < b->GetMaterial();
@@ -1433,7 +1323,6 @@ void Renderer::SortNodeLists() {
 		return a->GetCameraDistance() < b->GetCameraDistance();
 	});
 
-	// Transparent: farthest first, so nearer surfaces blend over farther ones correctly.
 	std::sort(transparentList.begin(), transparentList.end(), [](const SceneObject* a, const SceneObject* b) {
 		return a->GetCameraDistance() > b->GetCameraDistance();
 	});
@@ -1465,7 +1354,6 @@ void Renderer::BindMaterial(Material material) {
 		case Material::Tree: Use(*treeShader); break;
 	}
 
-	// Pull the road slightly toward the camera so it never z-fights the terrain under it.
 	if (material == Material::Road) {
 		glEnable(GL_POLYGON_OFFSET_FILL);
 		glPolygonOffset(-1.0f, -1.0f);
@@ -1474,7 +1362,6 @@ void Renderer::BindMaterial(Material material) {
 		glDisable(GL_POLYGON_OFFSET_FILL);
 	}
 
-	// Uniform locations are fixed per program, so look them up here, not per draw.
 	modelLoc  = glGetUniformLocation(activeProgram, "modelMatrix");
 	colourLoc = glGetUniformLocation(activeProgram, "baseColour");   // -1 if the shader has none
 	jointsLoc = glGetUniformLocation(activeProgram, "joints");       // only the skinning shader has bones
@@ -1483,8 +1370,6 @@ void Renderer::BindMaterial(Material material) {
 	materialBound = true;
 }
 
-// A skinned character: upload this instance's bone matrices, then draw each sub-mesh with its
-// own glTF material (texture and/or colour factor). Sub-mesh n uses material layer n.
 void Renderer::DrawSkinned(SkinnedObject* node) {
 	BindMaterial(Material::Skinned);
 
@@ -1524,7 +1409,6 @@ void Renderer::DrawNode(SceneObject* node) {
 
 	++stats.drawCalls;
 	if (node->GetMaterial() == Material::Building || node->GetMaterial() == Material::Tree) {
-		// One draw call, many instances: count them all.
 		stats.triangles += node->GetMesh()->GetTriCount() * static_cast<CityDistrict*>(node)->InstanceCount();   // valid: only CityDistrict uses Material::Building / Tree
 	}
 	else {
@@ -1556,7 +1440,6 @@ void Renderer::RenderScene() {
 	glViewport(0, 0, sceneWidth, sceneHeight);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-	// The shadow map lives on texture unit 4 for the whole main pass (see lighting.glslh).
 	glActiveTexture(GL_TEXTURE4);
 	glBindTexture(GL_TEXTURE_2D_ARRAY, shadowTex);
 	glActiveTexture(GL_TEXTURE5);   // the environment cube map lives on unit 5 (see carFragment.glsl)
@@ -1596,7 +1479,6 @@ void Renderer::RenderScene() {
 	DrawOverlay();
 	glQueryCounter(frameStamps[querySet][1], GL_TIMESTAMP);   // end of this frame (overlay included)
 
-	// An unused query object cannot be read, so shadows-off frames must still issue the shadow one.
 	if (!shadowsEnabled) {
 		BeginGpuTimer(PassShadow);
 		EndGpuTimer();
@@ -1608,8 +1490,6 @@ void Renderer::RenderScene() {
 	cpuRenderMs = cpuRenderMs * 0.9f + std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - cpuStart).count() * 0.1f;
 }
 
-// Debug overlay: translucent panels with text, drawn straight onto the screen after post-processing
-// (so it is never tinted, bloomed or faded). O toggles it, K adds the key list, I adds the timings.
 void Renderer::DrawOverlay() {
 	if (!overlay || !overlayEnabled) {
 		return;
@@ -1630,7 +1510,6 @@ void Renderer::DrawOverlay() {
 	const char* on  = "on ";
 	const char* off = "off";
 
-	// Green at 60 fps or better, amber down to 45, red below.
 	std::snprintf(buf, sizeof(buf), "FPS %3.0f (avg %.0f, low %.0f)  frame %.1f ms", displayFps, displayAvg, displayLow, displayFps > 0.0f ? 1000.0f / displayFps : 0.0f);
 	lines.push_back({ buf, displayFps >= 59.0f ? green : displayFps >= 45.0f ? amber : red });
 	std::snprintf(buf, sizeof(buf), "Time %02d:%02d  cam %s  scale %d%%", static_cast<int>(timeOfDay), static_cast<int>((timeOfDay - std::floor(timeOfDay)) * 60.0f), camName, scale);

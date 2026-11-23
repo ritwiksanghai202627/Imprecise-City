@@ -12,8 +12,6 @@ out Vertex {
 
 flat out float style;   // 0..1 pine seed, 2..3 broadleaf seed
 
-// One draw call per patch of trees: gl_InstanceID picks the tree, the unit tree mesh is scaled
-// (crown width, height), turned and moved to the tree's position, then bent by the wind.
 void main(void) {
 	Instance inst = instances[gl_InstanceID];
 	vec3 world    = InstanceToWorld(inst, position);

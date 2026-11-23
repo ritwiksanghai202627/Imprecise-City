@@ -2,8 +2,6 @@
 
 #include "../nclgl/SceneNode.h"
 
-// Which shader/material a drawable node uses. Opaque nodes sort by this first, then by distance.
-// Buildings come before the ground so early-z rejects the terrain they cover.
 enum class Material { Building, Tree, Road, Lit, Car, Skinned, Terrain, Sea };
 
 /*

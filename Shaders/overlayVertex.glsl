@@ -1,6 +1,5 @@
 #version 430 core
 
-// Debug overlay: vertices arrive in screen pixels (origin top-left) and are mapped to clip space here.
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 texCoord;
 layout(location = 2) in vec4 colour;

@@ -17,7 +17,6 @@ out vec4 fragColour;
 void main(void) {
 	float dist = length(IN.worldPos - cameraPos.xyz);
 
-	// World-space size of this pixel on the water surface. Drives the wave and glitter fades.
 	vec2  fp       = fwidth(IN.worldPos.xz);
 	float footprint = max(fp.x, fp.y);
 

@@ -1,9 +1,7 @@
 #version 430 core
 
-// Bloom step 2: separable Gaussian blur (run once horizontally, once vertically, twice over).
-// Nine taps per pass instead of an 81-tap 2D kernel.
 layout(binding = 0) uniform sampler2D sourceTex;
-uniform vec2 direction;   // one texel step: (1/width, 0) for horizontal, (0, 1/height) for vertical
+uniform vec2 direction;
 
 in vec2 uv;
 out vec4 fragColour;

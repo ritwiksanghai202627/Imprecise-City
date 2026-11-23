@@ -14,7 +14,6 @@ void main(void) {
 	vec4 worldPos = modelMatrix * vec4(position, 1.0);
 
 	OUT.worldPos = worldPos.xyz;
-	// mat3(modelMatrix) is a correct normal transform for uniform scale and axis-aligned boxes.
 	OUT.normal   = normalize(mat3(modelMatrix) * normal);
 	OUT.texCoord = texCoord;
 

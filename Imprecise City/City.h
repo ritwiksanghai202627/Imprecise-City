@@ -5,8 +5,6 @@
 #include <functional>
 #include <vector>
 
-// One building or lamp-post part. 32 bytes, laid out exactly like struct Instance in instance.glslh
-// (two vec4s), so the array can be uploaded to a shader storage buffer as it is.
 struct CityInstance {
 	float px, py, pz, yaw;    // base-centre position, rotation about Y (radians)
 	float sx, sy, sz, style;  // box size in metres; style: 0..1 = building seed, 10 = lamp pole, 11 = lamp head
@@ -26,9 +24,6 @@ the instances to the GPU and draws them instanced.
 */
 class City {
 public:
-	// Looks along the road for the flattest piece of land big enough for the city.
-	// On success: 'centre' is a road sample (so the road passes through the middle of town) and
-	// 'roadDistance' its distance along the road.
 	static bool ChooseSite(const RoadPath& road, const std::function<float(float, float)>& groundHeight,
 	                       float radius, Vector3& centre, float& roadDistance);
 

@@ -1,5 +1,3 @@
-// Per-instance data for instanced city geometry (buildings, lamp posts), read from a shader
-// storage buffer by gl_InstanceID. Layout matches struct CityInstance in City.h.
 struct Instance {
 	vec4 posYaw;      // xyz = base-centre position, w = rotation about Y (radians)
 	vec4 sizeStyle;   // xyz = box size in metres, w = style (building seed / lamp part)
@@ -9,14 +7,12 @@ layout(std430, binding = 0) readonly buffer InstanceBuffer {
 	Instance instances[];
 };
 
-// Rotation about the Y axis.
 vec3 InstanceRotate(Instance inst, vec3 v) {
 	float c = cos(inst.posYaw.w);
 	float s = sin(inst.posYaw.w);
 	return vec3(c * v.x + s * v.z, v.y, -s * v.x + c * v.z);
 }
 
-// Unit-box vertex -> world position: scale, rotate, translate.
 vec3 InstanceToWorld(Instance inst, vec3 localPos) {
 	return InstanceRotate(inst, localPos * inst.sizeStyle.xyz) + inst.posYaw.xyz;
 }

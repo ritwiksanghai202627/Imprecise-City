@@ -1,8 +1,6 @@
 #version 430 core
 #include "attributes.glslh"
 
-// Full-screen quad pinned to the far plane. The view direction of each pixel comes from
-// un-projecting the pixel with the camera's rotation (no translation: the sky never gets closer).
 uniform mat4 inverseProjView;
 
 out vec3 viewDir;

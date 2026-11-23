@@ -13,8 +13,6 @@ flat in float style;
 
 out vec4 fragColour;
 
-// Trees are untextured: trunk or leaves comes from the position in the unit tree, colour from
-// the species and a per-tree seed.
 void main(void) {
 	vec3 N = normalize(IN.normal);
 
@@ -32,8 +30,6 @@ void main(void) {
 		albedo = lerp(darker, lighter, seed) * (0.7 + 0.6 * IN.local.y);   // sunlit tops, darker insides
 	}
 
-	// Seasons (timeInfo: y = wetness, z = snow cover, w = autumn colour): broadleaf trees turn rust and drop their
-	// leaves in winter (darker, thinner colour), every tree gets snow on its upper surfaces and is darker when wet.
 	if (!trunk) {
 		if (broad) {
 			vec3 rust = lerp(vec3(0.62, 0.30, 0.05), vec3(0.62, 0.12, 0.06), seed) * (0.7 + 0.6 * IN.local.y);

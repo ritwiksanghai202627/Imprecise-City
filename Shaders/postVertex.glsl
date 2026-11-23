@@ -1,7 +1,6 @@
 #version 430 core
 #include "attributes.glslh"
 
-// Full-screen quad for the post-processing passes: uv runs 0..1 across the screen.
 out vec2 uv;
 
 void main(void) {

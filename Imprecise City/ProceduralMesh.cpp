@@ -36,7 +36,6 @@ ProceduralMesh::ProceduralMesh(const std::vector<Vector3>& positions,
 namespace {
 	const float kPi = 3.14159265358979f;
 
-	// sign(x) * |x|^e : the building block of a superellipsoid.
 	float SignedPow(float x, float e) {
 		return std::copysign(std::pow(std::fabs(x), e), x);
 	}
@@ -47,7 +46,6 @@ ProceduralMesh* BuildRoundedBox(const Vector3& radii, float e, int stacks, int s
 	std::vector<Vector2>      uvs;
 	std::vector<unsigned int> indices;
 
-	// v runs bottom to top, u runs round the middle (x towards z).
 	for (int i = 0; i <= stacks; ++i) {
 		const float v  = -kPi * 0.5f + kPi * i / stacks;
 		const float cv = std::cos(v), sv = std::sin(v);
@@ -60,7 +58,6 @@ ProceduralMesh* BuildRoundedBox(const Vector3& radii, float e, int stacks, int s
 				radii.y * SignedPow(sv, e),
 				radii.z * SignedPow(cv, e) * SignedPow(su, e)));
 
-			// Analytic normal: same expression with exponent (2 - e), divided by the radii.
 			Vector3 n(
 				SignedPow(cv, 2.0f - e) * SignedPow(cu, 2.0f - e) / radii.x,
 				SignedPow(sv, 2.0f - e) / radii.y,
@@ -72,7 +69,6 @@ ProceduralMesh* BuildRoundedBox(const Vector3& radii, float e, int stacks, int s
 		}
 	}
 
-	// Counter-clockwise seen from outside (checked in the unit test for this function).
 	const int stride = slices + 1;
 	for (int i = 0; i < stacks; ++i) {
 		for (int j = 0; j < slices; ++j) {
@@ -95,7 +91,6 @@ ProceduralMesh* BuildUnitBox() {
 	std::vector<Vector2>      uvs;
 	std::vector<unsigned int> indices;
 
-	// Each face: outward normal, then two tangent axes (u x v = normal, so the winding is counter-clockwise from outside).
 	struct Face { Vector3 n, u, v; };
 	const Face faces[6] = {
 		{ Vector3( 1, 0, 0), Vector3(0, 0,-1), Vector3(0, 1, 0) },

@@ -19,7 +19,6 @@ vertices are relative to the tile centre, plus a bounding sphere, so a tile that
 screen is never sent to the GPU. Texturing happens in the fragment shader from height and
 slope, so a tile only needs positions, normals and texture coordinates.
 */
-// A circular flat area (the city site): terrain is blended to height y between radius inner and outer.
 struct TerrainPlateau {
 	float x = 0.0f, z = 0.0f, y = 0.0f;
 	float inner = 0.0f, outer = 0.0f;   // outer <= inner means "no plateau"
@@ -39,12 +38,10 @@ public:
 
 	const std::vector<Chunk>& GetChunks() const { return chunks; }
 
-	// Height of the (carved) terrain at a world position; -30 outside the grid.
 	float HeightAt(float x, float z) const;
 
 	float GetHalfExtent() const { return halfExtent; }   // the grid spans -halfExtent .. +halfExtent on x and z
 
-	// The natural island before any carving. The road samples this to choose its own height.
 	static float IslandHeight(float x, float z);
 
 private:

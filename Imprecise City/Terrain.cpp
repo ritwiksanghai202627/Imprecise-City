@@ -14,7 +14,6 @@ namespace {
 		return t * t * (3.0f - 2.0f * t);
 	}
 
-	// Deterministic integer hash to 0..1.
 	float Hash2D(int x, int y) {
 		unsigned int n = static_cast<unsigned int>(x) * 374761393u + static_cast<unsigned int>(y) * 668265263u;
 		n = (n ^ (n >> 13)) * 1274126177u;
@@ -22,7 +21,6 @@ namespace {
 		return (n & 0xFFFFu) / 65535.0f;
 	}
 
-	// Value noise: random values on a grid, smoothly interpolated between grid points.
 	float ValueNoise(float x, float y) {
 		const float fx = std::floor(x);
 		const float fy = std::floor(y);
@@ -44,7 +42,6 @@ namespace {
 		return top + (bottom - top) * ty;
 	}
 
-	// Fractal noise: several octaves, each twice the frequency and half the weight. Result is 0..1.
 	float Fbm(float x, float y, int octaves) {
 		float sum = 0.0f, amplitude = 0.5f, total = 0.0f;
 		for (int i = 0; i < octaves; ++i) {
@@ -61,14 +58,11 @@ namespace {
 float Terrain::IslandHeight(float x, float z) {
 	const float islandRadius = 900.0f;
 
-	// Distance from the centre, wobbled by low-frequency noise so the coastline is irregular.
 	const float d      = std::sqrt(x * x + z * z);
 	const float wobble = (Fbm(x * 0.002f + 11.3f, z * 0.002f + 7.1f, 3) - 0.5f) * 500.0f;
 
-	// 1 inland, falling smoothly to 0 offshore.
 	const float land = 1.0f - Smoothstep(0.55f * islandRadius, islandRadius, d + wobble);
 
-	// Rolling hills; squaring the noise flattens the valleys and sharpens the peaks.
 	const float hills      = Fbm(x * 0.0035f, z * 0.0035f, 5);
 	const float landHeight = 8.0f + hills * hills * 130.0f;
 
@@ -88,7 +82,6 @@ Terrain::Terrain(const RoadPath& road, const TerrainPlateau& plateau, int gridSi
 		}
 	}
 
-	// City site: level a disc first, then carve the road, so the road inside the city lies on flat ground.
 	if (plateau.outer > plateau.inner) {
 		for (int z = 0; z < gridSize; ++z) {
 			for (int x = 0; x < gridSize; ++x) {
@@ -111,9 +104,6 @@ void Terrain::CarveRoad(const RoadPath& road) {
 	const float roadBedOffset = -0.25f;  // terrain sits a little below the asphalt so it never pokes through
 	const int   radius = static_cast<int>(std::ceil(shoulderWidth / cellSize)) + 1;
 
-	// For every grid vertex remember the closest point on the road and the road height there.
-	// Each road SEGMENT is splatted onto nearby vertices. The closest point on the segment gives
-	// the terrain the same height as the asphalt on bends and slopes.
 	const size_t count = heights.size();
 	std::vector<float> nearest(count, std::numeric_limits<float>::max());
 	std::vector<float> roadHeight(count, 0.0f);
@@ -138,7 +128,6 @@ void Terrain::CarveRoad(const RoadPath& road) {
 				const float px = ix * cellSize - halfExtent;
 				const float pz = iz * cellSize - halfExtent;
 
-				// Closest point on the segment a-b (in the ground plane): clamp the projection to [0,1].
 				float t = ((px - a.x) * abx + (pz - a.z) * abz) / abLenSq;
 				t = std::min(std::max(t, 0.0f), 1.0f);
 				const float ox = px - (a.x + abx * t);
@@ -154,8 +143,6 @@ void Terrain::CarveRoad(const RoadPath& road) {
 		}
 	}
 
-	// Blend the terrain toward the road height: full strength inside flatHalfWidth,
-	// fading to nothing at shoulderWidth.
 	for (size_t i = 0; i < count; ++i) {
 		if (nearest[i] < shoulderWidth) {
 			const float w = 1.0f - Smoothstep(flatHalfWidth, shoulderWidth, nearest[i]);
@@ -165,8 +152,6 @@ void Terrain::CarveRoad(const RoadPath& road) {
 }
 
 Vector3 Terrain::NormalAt(int ix, int iz) const {
-	// Central differences on the full grid (clamped at the edges). Chunks call this with
-	// global indices, so two tiles sharing a border vertex get the identical normal.
 	auto h = [this](int x, int z) {
 		x = std::min(std::max(x, 0), gridSize - 1);
 		z = std::min(std::max(z, 0), gridSize - 1);
@@ -183,9 +168,6 @@ void Terrain::BuildChunks() {
 	const int   vertsPerSide   = cells + 1;
 	const float uvPerUnit      = 1.0f / 24.0f;   // one texture repeat every 24 world units
 
-	// Vertices are stored relative to the chunk centre, so every chunk has the same index list.
-	// Each grid cell is two triangles; with a = (x,z), b = (x+1,z), c = (x,z+1), d = (x+1,z+1),
-	// (a,c,b) and (b,c,d) are counter-clockwise seen from above, so the front face points up.
 	std::vector<unsigned int> indices;
 	indices.reserve(static_cast<size_t>(cells) * cells * 6);
 	for (int z = 0; z < cells; ++z) {
@@ -238,7 +220,6 @@ void Terrain::BuildChunks() {
 				}
 			}
 
-			// Sphere that encloses the tile's footprint (half-diagonal) and its height range.
 			const float half = cells * cellSize * 0.5f;
 			const float halfHeight = (hMax - hMin) * 0.5f;
 
@@ -269,7 +250,6 @@ float Terrain::HeightAt(float x, float z) const {
 	const float h01 = heights[static_cast<size_t>(iz + 1) * gridSize + ix];
 	const float h11 = heights[static_cast<size_t>(iz + 1) * gridSize + ix + 1];
 
-	// Interpolate on the triangle the point is actually in, so the sampled height matches the mesh.
 	if (fx + fz <= 1.0f) {   // triangle (a, b, c)
 		return h00 + (h10 - h00) * fx + (h01 - h00) * fz;
 	}

@@ -3,12 +3,11 @@
 #include "support.glslh"
 #include "sky.glslh"
 
-uniform int face;   // 0..5 = +X, -X, +Y, -Y, +Z, -Z (OpenGL's cube map face order)
+uniform int face;
 
 in vec2 faceUV;
 out vec4 fragColour;
 
-// The direction a cube map face texel looks at (OpenGL cube map convention).
 vec3 CubeDirection(int f, vec2 uv) {
 	float u = uv.x;
 	float v = uv.y;

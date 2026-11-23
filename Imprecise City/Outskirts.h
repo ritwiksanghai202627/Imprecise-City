@@ -1,15 +1,5 @@
 #pragma once
 
-// Trees and a small village outside the city. Header-only, like DebugOverlay.h.
-// Builds instance lists and three small meshes; the Renderer uploads them and draws each 192 m
-// patch with one instanced call, so patches are frustum-culled like the city.
-//
-// Instance layout (CityInstance, see City.h):
-//   tree:   position = base of the trunk, sx = sz = crown width, sy = height (metres),
-//           style = seed 0..1 for a pine, 2 + seed for a broadleaf tree
-//   house:  a box like a city building, style = 3 + seed (the facade shader gives it a house look)
-//   roof:   a gable prism on top of a house, style = 12 + seed
-
 #include "City.h"
 #include "ProceduralMesh.h"
 #include "RoadPath.h"
@@ -26,7 +16,6 @@ namespace Outskirts {
 namespace detail {
 	const float kPi = 3.14159265f;
 
-	// Deterministic hash.
 	inline float Hash(int a, int b, int salt) {
 		unsigned int n = static_cast<unsigned int>(a) * 374761393u + static_cast<unsigned int>(b) * 668265263u
 		               + static_cast<unsigned int>(salt) * 2147483647u;
@@ -41,7 +30,6 @@ namespace detail {
 		return t * t * (3.0f - 2.0f * t);
 	}
 
-	// Smooth value noise (0..1) on a lattice of Hash values: big soft blobs, used for forest patches.
 	inline float Noise(float x, float z, int salt) {
 		const float fx = std::floor(x), fz = std::floor(z);
 		const int   ix = static_cast<int>(fx), iz = static_cast<int>(fz);
@@ -54,7 +42,6 @@ namespace detail {
 		return top + (bottom - top) * tz;
 	}
 
-	// Road samples bucketed into 32 m cells for a fast nearest-road query.
 	class RoadGrid {
 	public:
 		explicit RoadGrid(const RoadPath& road) : cells(kSide * kSide) {
@@ -65,7 +52,6 @@ namespace detail {
 				}
 			}
 		}
-		// Squared distance to the nearest road sample if it is within ~32 m, else 1e9.
 		float NearestSq(float x, float z) const {
 			const int cx = Cell(x), cz = Cell(z);
 			float best = 1e9f;
@@ -90,7 +76,6 @@ namespace detail {
 	};
 }
 
-// Meshes are built in unit space: x,z in -0.5..0.5, y from 0 (ground) to 1. Instance size scales them.
 struct MeshData {
 	std::vector<Vector3> p, n;
 	std::vector<Vector2> uv;
@@ -100,7 +85,6 @@ struct MeshData {
 		p.push_back(pos); n.push_back(nor); uv.push_back(Vector2(0.0f, 0.0f));
 		return static_cast<unsigned int>(p.size() - 1);
 	}
-	// Adds a triangle, flipping two corners if needed so its winding matches the vertex normals.
 	void Tri(unsigned int a, unsigned int b, unsigned int c) {
 		const Vector3 e1 = p[b] - p[a], e2 = p[c] - p[a];
 		const Vector3 g(e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z, e1.x * e2.y - e1.y * e2.x);
@@ -118,7 +102,6 @@ inline Vector3 Unit(float x, float y, float z) {
 	return Vector3(x / l, y / l, z / l);
 }
 
-// Open cone with a flat base (the base is seen from below under the lowest branches).
 inline void AddCone(MeshData& m, float baseY, float radius, float tipY, int sides) {
 	const float height = tipY - baseY;
 	for (int k = 0; k < sides; ++k) {
@@ -149,7 +132,6 @@ inline void AddCylinder(MeshData& m, float radius, float y0, float y1, int sides
 	}
 }
 
-// Squashed sphere for a broadleaf crown: 5 rings x 8 segments (about 70 triangles).
 inline void AddEllipsoid(MeshData& m, float centreY, float rx, float ry, int rings, int segs) {
 	std::vector<unsigned int> grid;
 	for (int i = 0; i <= rings; ++i) {
@@ -204,10 +186,6 @@ inline ProceduralMesh* BuildRoof() {   // gable roof: ridge along x, 10 triangle
 	return m.Build();
 }
 
-// Placement
-
-// Looks along the road for flat dry land far from the city. Tries stricter rules first, then
-// loosens them if no site passes.
 inline bool FindVillageSite(const RoadPath& road, const Terrain& terrain, bool hasCity, const Vector3& cityCentre,
                             Vector3& centre, float& roadDistance) {
 	const std::vector<Vector3>& pts = road.GetPoints();
@@ -255,7 +233,6 @@ inline void Generate(const RoadPath& road, const Terrain& terrain, bool hasCity,
 	using detail::Smoothstep;
 	const detail::RoadGrid roadGrid(road);
 
-	// ---- Village: houses on both sides of the road, 24 m apart, each on its own level of ground.
 	Vector3 village;
 	float   villageDistance = 0.0f;
 	const bool hasVillage = FindVillageSite(road, terrain, hasCity, cityCentre, village, villageDistance);
@@ -279,7 +256,6 @@ inline void Generate(const RoadPath& road, const Terrain& terrain, bool hasCity,
 				const float   cx = p.x + right.x * side * offset, cz = p.z + right.z * side * offset;
 				const float   fx = 8.0f + 4.0f * Hash(k, s, 23), fz = 7.0f + 3.0f * Hash(k, s, 24);
 
-				// House sits on the lowest corner, walls reach the highest, so it never floats on a slope.
 				float lo = 1e9f, hi = -1e9f;
 				for (int c = 0; c < 4; ++c) {
 					const float ax = (c & 1) ? 0.5f * fx : -0.5f * fx, az = (c & 2) ? 0.5f * fz : -0.5f * fz;
@@ -302,7 +278,6 @@ inline void Generate(const RoadPath& road, const Terrain& terrain, bool hasCity,
 		}
 	}
 
-	// ---- Trees: a jittered grid over the island (one candidate per 10 m cell), thinned by rules.
 	const float cell  = 10.0f;
 	const float extent = 950.0f;
 	const int   count = static_cast<int>(2.0f * extent / cell);
@@ -337,14 +312,12 @@ inline void Generate(const RoadPath& road, const Terrain& terrain, bool hasCity,
 				}
 			}
 
-			// Forest patches: soft noise decides where trees crowd together; a few stand alone elsewhere.
 			const float mask    = 0.65f * detail::Noise(x * 0.004f, z * 0.004f, 5) + 0.35f * detail::Noise(x * 0.011f, z * 0.011f, 6);
 			const float density = (0.04f + 0.86f * Smoothstep(0.46f, 0.60f, mask)) * (1.0f - Smoothstep(70.0f, 95.0f, h));
 			if (Hash(ix, iz, 3) > density) {
 				continue;
 			}
 
-			// Lowlands get broadleaf trees, the hills get pines, with a mix in between.
 			const bool  isBroadleaf = Hash(ix, iz, 4) > Smoothstep(20.0f, 60.0f, h) * 0.9f + 0.05f;
 			const float seed = Hash(ix, iz, 7);
 			const float yaw  = Hash(ix, iz, 8) * 6.2831853f;

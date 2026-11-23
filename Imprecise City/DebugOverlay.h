@@ -1,14 +1,5 @@
 #pragma once
 
-// Debug overlay: text and translucent panels drawn in screen pixels on top of the finished frame.
-//
-// Header-only. Windows only: the font atlas is rasterised once with GDI (Consolas, or the
-// substituted monospace font), so no font file or third-party library is needed. Ninety-six
-// glyphs (ASCII 32..127) go into one R8 texture; each frame the text becomes two triangles per
-// character in one buffer.
-//
-// Usage per frame:  Begin() -> Panel() / Text() calls -> bind GetShader() -> Draw().
-
 #include "../nclgl/OGLRenderer.h"
 #include "../nclgl/Shader.h"
 
@@ -31,7 +22,6 @@ public:
 		glDeleteVertexArrays(1, &vao);
 	}
 
-	// Needs a current GL context. 'screenHeight' picks the font size (about 17 px at 1080p).
 	bool Create(int screenHeight) {
 		shader = std::make_unique<Shader>("overlayVertex.glsl", "overlayFragment.glsl");
 		if (!shader->LoadSuccess() || !BuildFontAtlas(screenHeight)) {
@@ -51,7 +41,6 @@ public:
 		glBindVertexArray(0);
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-		// Uniform locations are fixed for the program's lifetime: look them up once.
 		const GLuint program = shader->GetProgram();
 		screenLoc  = glGetUniformLocation(program, "screenSize");
 		textureLoc = glGetUniformLocation(program, "useTexture");
@@ -89,7 +78,6 @@ public:
 		}
 	}
 
-	// The overlay shader must already be bound. Leaves depth testing on and blending off, as the renderer expects.
 	void Draw() {
 		if (panelVerts.empty() && textVerts.empty()) {
 			return;
@@ -104,7 +92,6 @@ public:
 		glActiveTexture(GL_TEXTURE7);
 		glBindTexture(GL_TEXTURE_2D, fontTexture);
 
-		// Panels first, then the text on top of them, in one buffer.
 		const GLsizeiptr panelBytes = (GLsizeiptr)(panelVerts.size() * sizeof(Vertex));
 		const GLsizeiptr textBytes  = (GLsizeiptr)(textVerts.size() * sizeof(Vertex));
 		glBindVertexArray(vao);
@@ -146,8 +133,6 @@ private:
 		out.push_back(a); out.push_back(d); out.push_back(e);
 	}
 
-	// Draws ASCII 32..127 with GDI into a 32-bit DIB (white on black, anti-aliased) and keeps
-	// one byte of coverage per pixel as an R8 texture.
 	bool BuildFontAtlas(int screenHeight) {
 		const int fontHeight = std::max(14, screenHeight / 62);
 		HDC dc = CreateCompatibleDC(nullptr);

@@ -19,8 +19,6 @@
 class Terrain;
 class RoadPath;
 
-// CPU mirror of the FrameData uniform block in Shaders/frame.glslh (std140).
-// Field order and types must match the GLSL block exactly.
 constexpr int kMaxPointLights = 8;   // street lamps nearest the camera (the renderer picks them each frame)
 constexpr int kMaxSpotLights  = 2;   // the car's headlights
 
@@ -55,7 +53,6 @@ static_assert(sizeof(Matrix4) == 64, "FrameData assumes Matrix4 is 16 floats");
 static_assert(sizeof(Vector4) == 16, "FrameData assumes Vector4 is 4 floats");
 static_assert(sizeof(FrameData) == 3 * 64 + 7 * 16 + kMaxPointLights * 32 + kMaxSpotLights * 48 + 64 + 16, "FrameData must match the std140 block in frame.glslh");
 
-// Per-frame counters, shown in the debug overlay.
 struct FrameStats {
 	unsigned nodesTotal = 0;   // drawable nodes in the scene
 	unsigned nodesDrawn = 0;   // ...that survived culling
@@ -64,8 +61,6 @@ struct FrameStats {
 	unsigned shadowDraws = 0;   // draw calls in the shadow pass
 };
 
-// GPU time per pass, measured with GL_TIME_ELAPSED queries. The result of a query is read one
-// frame late (two query sets alternate), so reading never stalls the pipeline.
 enum GpuPass { PassShadow, PassOpaque, PassSky, PassTransparent, PassPost, PassCount };
 
 class Renderer : public OGLRenderer {
@@ -79,7 +74,6 @@ public:
 private:
 	enum class CameraMode { Drive, Free, Trailer };   // C cycles: chase the car -> free fly -> trailer (director)
 
-	// Scene graph
 	void BuildScene();
 	void CullNodes(SceneNode* node, Frustum& frustum, bool shadowPass);   // frustum test, then fill the opaque / transparent / shadow-caster lists
 	void CreateShadowMap();
@@ -94,21 +88,18 @@ private:
 	void DrawSkinned(SkinnedObject* node);
 	void BindMaterial(Material material);
 
-	// Sky, environment map, characters
 	void BuildEnvironmentMap();   // bakes the sky into a cube map (once; again when the sun moves)
 	void DrawSky();
 	void CreateWhiteTexture();
 	void BuildWalkers();
 	void UpdateWalkers(float dt);
 
-	// Camera and per-frame
 	void   UpdateCinematicCamera(float dt);   // the shot director (see EvaluateShot)
 	void   StartShot(int index);
 	void   ResumeDirector();                  // back to auto mode: continue with the next shot not yet seen
 	void   EvaluateShot(int index, float t, Vector3& eye, Vector3& target, float& fov) const;
 	void   GetCarFrame(Vector3& position, Vector3& forward, Vector3& right) const;
 
-	// Post-processing: the scene renders into an HDR target, then bloom + tone map + vignette
 	void   CreatePostTargets();
 	void   DestroyPostTargets();
 	void   CycleRenderScale();
@@ -132,8 +123,6 @@ private:
 	GLuint LoadTexture(const std::string& fileName);
 	void   Use(Shader& shader);
 
-	// Cinematic director: a list of shots played in order. Shots watched for a few seconds count
-	// as seen; when auto mode is resumed after free flight it continues at the first unseen shot.
 	static const int kShotCount = 14;
 	int    shotIndex = 0;
 	float  shotTime  = 0.0f;
@@ -141,8 +130,7 @@ private:
 	char   shotSeen[kShotCount] = {};
 	float  shotFov   = 60.0f;
 	float  fade      = 0.0f;              // 0..1 black, drives the composite pass
-	float  startupTimer = 0.0f;           // the world holds still (screen black) for the first moments, so a recording can start cleanly
-	// Two points on the coast (found once at start-up) that the beach / sea shots are built around.
+	float  startupTimer = 0.0f;           // screen black at start for recording
 	float  shoreAngle[2]  = { 0.9f, 3.9f };
 	float  shoreRadius[2] = { 800.0f, 800.0f };
 	void   FindShores();
@@ -150,7 +138,6 @@ private:
 	Vector3 cityCentre;
 	float   cityRoadDistance = 0.0f;
 
-	// HDR render target and bloom chain (quarter resolution of the scene target)
 	GLuint hdrFBO = 0, hdrColour = 0, hdrDepth = 0;
 	GLuint bloomFBO[2] = {}, bloomTex[2] = {};
 	int    sceneWidth = 0, sceneHeight = 0;    // size of the HDR target = window size x renderScale
@@ -162,16 +149,14 @@ private:
 	bool   lensEnabled     = true;   // L toggles (chromatic aberration + film grain, in the composite pass)
 	bool   verboseTitle    = false;  // I adds the GPU / CPU timings to the overlay
 
-	// Debug overlay: O toggles it, K lists the keys, I adds timings. Off by default so recordings stay clean.
 	std::unique_ptr<DebugOverlay> overlay;
 	bool   overlayEnabled = false;
 	bool   keysPanel      = false;
 	float  displayFps = 0.0f, displayAvg = 0.0f, displayLow = 0.0f;   // refreshed twice a second with the title
 
-	// Camera
 	Camera     camera;               // nclgl free-fly camera
 	CameraMode cameraMode = CameraMode::Drive;
-	float      freeCameraSpeed = 1.0f;   // 1 = nclgl stock speed; left/right mouse button change it at runtime
+	float      freeCameraSpeed = 1.0f;   // starts at nclgl speed; mouse buttons change it
 	Vector3    eyePosition;
 	Vector3    lookTarget;
 
@@ -187,7 +172,6 @@ private:
 	std::unique_ptr<Mesh>     seaMesh;
 	float carDistance = 0.0f;
 
-	// Other cars on the road (same mesh as the player's, different paint)
 	struct TrafficCar {
 		SceneObject* node;
 		float distance;    // metres along the road
@@ -197,22 +181,17 @@ private:
 	};
 	std::vector<TrafficCar> traffic;
 
-	// Time of day: hours 0..24. T jumps between presets, Y runs the clock.
 	float timeOfDay      = 8.5f;    // starts on a bright morning
 	bool  timeAuto       = true;    // the clock runs by default (Y stops it)
 	int   timePreset     = 0;
-	// Seasons: rain (the opening), summer, autumn, winter, spring. P = next season, N = run / stop the automatic cycle.
-	// The scene reads the smoothed weather values below: wetness, snow cover and autumn colour go to the shaders in
-	// frameData.timeInfo (y, z, w); rain / snowfall drive the precipitation in the composite pass; overcast greys the sky.
 	int   season         = 0;       // starts in the rain
 	bool  seasonAuto     = true;
 	float seasonTimer    = 0.0f;    // seconds spent in the current season
 	float wetness = 0.0f, snowCover = 0.0f, autumnAmount = 0.0f, rainFall = 0.0f, snowFall = 0.0f, overcast = 0.0f;
-	int   vsyncMode      = 2;       // X cycles: 0 off, 1 on, 2 adaptive (tears instead of dropping to 30 fps when a frame is late)
+	int   vsyncMode      = 2;       // X cycles: 0 off, 1 on, 2 adaptive
 	float lastBakedHour  = -100.0f;   // the sky was last baked into the cube map at this hour
 	std::vector<std::pair<float, int>> lampScratch;   // reused every frame: (distance^2, lamp index)
 
-	// Animated characters: one shared model, several instances walking along the verge of the road
 	struct Walker {
 		SkinnedObject* node;
 		float distance;    // metres along the road
@@ -224,28 +203,21 @@ private:
 	std::unique_ptr<AnimatedModel> walkerModel;
 	std::vector<Walker>            walkers;
 
-	// Scene graph: declared after the meshes, so it is destroyed before them
 	std::unique_ptr<SceneNode> root;
 	SceneObject*               carNode = nullptr;
 	std::vector<SceneObject*>  opaqueList;
 	std::vector<SceneObject*>  transparentList;
 
-	// Culling. The frustum is rebuilt every frame unless frozen (F), so you can fly out
-	// and see what the camera that was frozen could not see.
 	Frustum cullFrustum;
 	bool    cullingFrozen = false;
 
-	// Sun shadow: two cascades (0 = near and sharp, 1 = far and wide), each an orthographic depth map that follows the camera
 	static const int          kShadowCascades = 2;
 	Frustum                   shadowFrustum[kShadowCascades];
 	std::vector<SceneObject*> shadowCasterList;
 	std::unique_ptr<Shader>   shadowShader;
 	GLuint  shadowFBO = 0;
 
-	// GPU pass timers (see GpuPass). [set][pass]; 'set' alternates every frame.
 	GLuint queries[2][PassCount] = {};
-	// Whole-frame GPU time: two GL_TIMESTAMP queries (start / end of RenderScene) per set. A timestamp
-	// pair can run alongside the per-pass GL_TIME_ELAPSED queries, which cannot be nested.
 	GLuint frameStamps[2][2] = {};
 	float  gpuFrameMs = 0.0f;     // GPU time from the first to the last command of the frame (smoothed)
 	float  cpuUpdateMs = 0.0f;    // CPU time inside UpdateScene (smoothed)
@@ -262,7 +234,6 @@ private:
 	bool    shadowsEnabled = true;     // H toggles
 	Vector3 sunDirection;              // unit vector towards the sun
 
-	// Shaders and textures
 	std::unique_ptr<Shader> terrainShader, roadShader, seaShader, litShader;
 	std::unique_ptr<Shader> buildingShader, buildingShadowShader;
 	std::unique_ptr<Shader> treeShader, treeShadowShader;
@@ -275,18 +246,15 @@ private:
 	Vector3 zenithColour;              // sky colour straight up (horizon colour = fog colour)
 	GLuint activeProgram = 0;
 
-	// Material binding cache (uniform locations are looked up once per material switch)
 	bool     materialBound = false;
 	Material boundMaterial = Material::Terrain;
 	GLint    modelLoc  = -1;
 	GLint    colourLoc = -1;
 	GLint    jointsLoc = -1;   // bone matrix array, skinned material only
 
-	// Frame data
 	GLuint frameUBO = 0;
 	FrameData frameData;
 
-	// Time and stats
 	std::chrono::steady_clock::time_point lastTick;
 	float      elapsedSeconds = 0.0f;
 	FrameStats stats;

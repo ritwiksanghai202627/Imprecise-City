@@ -1,13 +1,7 @@
-// Skeletal animation helper. Needs attributes.glslh included first (jointWeights, jointIndices).
-//
-// 'joints' holds one matrix per bone, already multiplied by the inverse bind pose on the CPU
-// (see AnimatedModel::Pose), so a vertex is skinned by blending the matrices of the (up to four)
-// bones that influence it, weighted by jointWeights.
 #define MAX_JOINTS 128
 uniform mat4 joints[MAX_JOINTS];
 
 mat4 SkinMatrix() {
-	// Normalise the weights so a model whose weights do not sum to exactly 1 does not shrink.
 	vec4  w   = jointWeights;
 	float sum = w.x + w.y + w.z + w.w;
 	w = (sum > 0.0001) ? w / sum : vec4(1.0, 0.0, 0.0, 0.0);

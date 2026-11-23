@@ -10,8 +10,6 @@ namespace {
 		return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
 	}
 
-	// Uniform Catmull-Rom: returns p1 at t = 0 and p2 at t = 1, and the curve is smooth
-	// across segment joins because p0 and p3 steer the tangents.
 	Vector3 CatmullRom(const Vector3& p0, const Vector3& p1, const Vector3& p2, const Vector3& p3, float t) {
 		const float t2 = t * t;
 		const float t3 = t2 * t;
@@ -26,8 +24,6 @@ RoadPath::RoadPath(const std::vector<Vector3>& controlPoints, float sampleSpacin
 	: spacing(sampleSpacing), closed(isClosed) {
 	assert(controlPoints.size() >= 3);
 
-	// Step 1: sample the spline densely (64 samples per segment). A closed road has one more
-	// segment (last -> first) and the control point indices wrap around.
 	std::vector<Vector3> dense;
 	const int    stepsPerSegment = 64;
 	const int    count           = static_cast<int>(controlPoints.size());
@@ -48,15 +44,12 @@ RoadPath::RoadPath(const std::vector<Vector3>& controlPoints, float sampleSpacin
 		p.y = 0.0f;
 	}
 
-	// Step 2: cumulative arc length along the dense polyline.
 	std::vector<float> arc(dense.size(), 0.0f);
 	for (size_t i = 1; i < dense.size(); ++i) {
 		arc[i] = arc[i - 1] + Length(dense[i] - dense[i - 1]);
 	}
 	const float total = arc.back();
 
-	// Step 3: pick evenly spaced samples by arc length. For a closed road the spacing is nudged
-	// so a whole number of samples fits the loop exactly (the seam is then as even as the rest).
 	int sampleCount = static_cast<int>(total / spacing);
 	if (closed) {
 		sampleCount = std::max(sampleCount, 3);
@@ -84,8 +77,6 @@ void RoadPath::SnapToTerrain(const std::function<float(float, float)>& baseHeigh
 		p.y = std::max(baseHeight(p.x, p.z), minHeight);
 	}
 
-	// Moving-average smoothing along the road. Each pass blends a point with its
-	// neighbours; several passes approximate a Gaussian blur of the height profile.
 	const int n = static_cast<int>(points.size());
 	std::vector<float> smoothed(n);
 
@@ -122,7 +113,6 @@ Vector3 RoadPath::PositionAt(float distance) const {
 	const int n = static_cast<int>(points.size());
 
 	if (closed) {
-		// Wrap the distance into [0, length), then lerp between neighbours (the last one links to the first).
 		const float length = GetLength();
 		distance -= std::floor(distance / length) * length;
 		const float f = distance / spacing;
@@ -158,7 +148,6 @@ std::vector<RoadPath::RibbonSegment> RoadPath::BuildRibbonSegments(float halfWid
 	for (int first = 0; first < quadCount; first += samplesPerSegment) {
 		const int last = std::min(first + samplesPerSegment, quadCount);   // this piece covers steps first..last
 
-		// Centre of the piece (average of its samples); vertices are stored relative to it.
 		Vector3 centre(0, 0, 0);
 		for (int i = first; i <= last; ++i) {
 			centre = centre + points[i % pointCount];
@@ -174,8 +163,6 @@ std::vector<RoadPath::RibbonSegment> RoadPath::BuildRibbonSegments(float halfWid
 		for (int i = first; i <= last; ++i) {
 			const Vector3 t = DirectionAt(i * spacing);
 
-			// 'Right' of the direction of travel, kept horizontal so the road never banks.
-			// This is cross(forward, up) with up = (0,1,0), written out.
 			float hx = t.x, hz = t.z;
 			const float hl = std::sqrt(hx * hx + hz * hz);
 			if (hl > 1e-5f) { hx /= hl; hz /= hl; }
@@ -195,7 +182,6 @@ std::vector<RoadPath::RibbonSegment> RoadPath::BuildRibbonSegments(float halfWid
 			texCoords.push_back(Vector2(1.0f, v));
 		}
 
-		// Two triangles per step, wound so the front face points up.
 		for (unsigned int k = 0; k + 1 < positions.size() / 2; ++k) {
 			const unsigned int l0 = 2 * k, r0 = 2 * k + 1, l1 = 2 * k + 2, r1 = 2 * k + 3;
 			indices.push_back(l0); indices.push_back(r0); indices.push_back(l1);

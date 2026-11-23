@@ -15,8 +15,6 @@ flat in vec3 faceNormal;
 
 out vec4 fragColour;
 
-// Everything about a building's look is procedural: wall colour, window grid, which windows are
-// lit at night, neon shop fronts. No textures, no extra geometry.
 void main(void) {
 	vec3  N     = normalize(IN.normal);
 	float style = sizeStyle.w;
@@ -26,11 +24,9 @@ void main(void) {
 	vec3 emissive = vec3(0.0);
 
 	if (style > 11.5) {
-		// Village roof (a gable prism, see Outskirts.h): terracotta or slate, chosen by the seed in the fraction.
 		albedo = lerp(vec3(0.46, 0.21, 0.15), vec3(0.22, 0.24, 0.28), step(0.5, fract(style)));
 	}
 	else if (style > 10.5) {
-		// Lamp head: glows when the street lights are on.
 		albedo   = vec3(0.7);
 		emissive = vec3(1.0, 0.78, 0.45) * 2.5 * smoothstep(0.2, 0.5, night);
 	}
@@ -50,7 +46,6 @@ void main(void) {
 			albedo = wall * 0.55;   // roof
 		}
 		else {
-			// Window grid on the wall: one cell = 3.2 m wide, 3.6 m tall (one storey).
 			vec2 fc       = abs(faceNormal.x) > 0.5 ? IN.local.zy : IN.local.xy;
 			vec2 cellSize = vec2(3.2, 3.6);
 			vec2 id       = floor(fc / cellSize);
@@ -72,13 +67,11 @@ void main(void) {
 		}
 	}
 
-	// Snow on roofs and any upward-facing surface; wet surfaces are a little darker (timeInfo: y = wetness, z = snow cover).
 	albedo = lerp(albedo, vec3(0.90, 0.93, 0.98), timeInfo.z * smoothstep(0.5, 0.9, N.y));
 	albedo *= 1.0 - 0.2 * timeInfo.y;
 
 	float dist   = length(IN.worldPos - cameraPos.xyz);
 
-	// Cloud shadows on buildings; see CloudShadow for the distance fade.
 	float shadow = ShadowFactor(IN.worldPos, N) * CloudShadow(IN.worldPos, dist);
 	vec3  colour = ApplyLighting(albedo, N, IN.worldPos, shadow) + emissive;
 

@@ -22,29 +22,23 @@ void main(void) {
 
 	vec2 xz = IN.worldPos.xz;
 
-	// Two samples at unrelated scales hide the repeat of a single tiling texture.
 	vec3 grass = 0.6 * texture(grassTex, IN.texCoord).rgb
 	           + 0.4 * texture(grassTex, IN.texCoord * 0.173 + vec2(0.37, 0.11)).rgb;
 
-	// One noise field for the colour variation and the beach / rock height thresholds.
 	float wobbleNoise = ValueNoise(xz * 0.035);
 	float wobble      = (wobbleNoise - 0.5) * 7.0;
 	grass *= 0.85 + 0.30 * wobbleNoise;
 
-	// Texture choice comes from height and steepness, so no splat map is needed.
 	float sandAmount = 1.0 - smoothstep(2.0, 10.0, IN.worldPos.y + wobble);
 	float rockAmount = smoothstep(0.20, 0.40, slope + wobble * 0.02);
 
-	// Conditional texture fetches need explicit derivatives for correct mip selection.
 	vec2 dx = dFdx(IN.texCoord);
 	vec2 dy = dFdy(IN.texCoord);
 
-	// Most pixels are pure grass: only fetch sand / rock where they actually contribute.
 	vec3 albedo = grass;
 	if (sandAmount > 0.001) {
 		vec3 sand = textureGrad(sandTex, IN.texCoord, dx, dy).rgb;
 
-		// Wet sand just above the waterline.
 		float wet = 1.0 - smoothstep(0.0, 2.2, IN.worldPos.y + wobble * 0.15);
 		sand *= lerp(1.0, 0.55, wet);
 
@@ -54,8 +48,6 @@ void main(void) {
 		albedo = lerp(albedo, textureGrad(rockTex, IN.texCoord, dx, dy).rgb, rockAmount);
 	}
 
-	// Seasons (timeInfo: y = wetness, z = snow cover, w = autumn colour). Autumn turns grass to straw and rust,
-	// snow whitens flat ground above the beach (not cliffs), wet ground is darker.
 	if (timeInfo.y + timeInfo.z + timeInfo.w > 0.001) {
 		float grassOnly = (1.0 - sandAmount) * (1.0 - rockAmount);
 		albedo = lerp(albedo, albedo * vec3(1.55, 0.95, 0.45) + vec3(0.05, 0.02, 0.0), timeInfo.w * grassOnly);
@@ -64,7 +56,6 @@ void main(void) {
 		albedo *= 1.0 - 0.30 * timeInfo.y * (1.0 - snowMask);
 	}
 
-	// A soft highlight on the lowest strip of beach; the sea shader draws the main foam.
 	float wash  = sin(timeInfo.x * 0.35 + wobbleNoise * 6.2831853) * 0.22;
 	float shore = 1.0 - smoothstep(0.02, 0.95, IN.worldPos.y + wobble * 0.18 - wash);
 	if (shore > 0.001) {

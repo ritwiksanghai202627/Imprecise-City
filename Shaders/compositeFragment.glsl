@@ -1,7 +1,5 @@
 #version 430 core
 
-// Final post-processing pass: HDR scene + bloom -> tone mapping -> vignette and colour grade ->
-// fade to black (used between camera shots) -> the screen.
 layout(binding = 0) uniform sampler2D sceneTex;
 layout(binding = 1) uniform sampler2D bloomTex;
 
@@ -17,8 +15,6 @@ uniform float precipTime;       // seconds, drives the fall
 in vec2 uv;
 out vec4 fragColour;
 
-// Leaves normal brightness untouched (below 0.8) and rolls the bright values off smoothly towards 1,
-// so HDR highlights do not clip to flat white and the daytime look is unchanged.
 vec3 ToneMap(vec3 x) {
 	vec3 over = max(x - 0.8, vec3(0.0));
 	return min(x, vec3(0.8)) + 0.2 * (1.0 - exp(-over / 0.2));
@@ -28,7 +24,6 @@ float CellHash(vec2 id) {
 	return fract(sin(dot(id, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-// Screen-space rain: thin slanted streaks in three layers (near = long and fast, far = short and faint).
 float RainLayer(vec2 uv, float aspect, float density, float t) {
 	vec2 p = vec2(uv.x * aspect * density, uv.y * density * 0.08);
 	p.y += t * density * 0.10;
@@ -41,7 +36,6 @@ float RainLayer(vec2 uv, float aspect, float density, float t) {
 	return step(0.60, h) * streak;
 }
 
-// Screen-space snow: soft flakes in three layers (big and soft = near, small and faint = far).
 float SnowLayer(vec2 uv, float aspect, float density, float t) {
 	vec2 p = vec2(uv.x * aspect, uv.y) * density;
 	p.y += t * density * 0.09;
@@ -56,7 +50,6 @@ float SnowLayer(vec2 uv, float aspect, float density, float t) {
 void main(void) {
 	vec3 scene;
 	if (lensAmount > 0.0) {
-		// Red and blue are sampled slightly apart, more so towards the corners (like a real lens).
 		vec2 c   = uv - 0.5;
 		vec2 off = c * dot(c, c) * 0.02;
 		scene = vec3(texture(sceneTex, uv + off).r, texture(sceneTex, uv).g, texture(sceneTex, uv - off).b);
@@ -71,7 +64,6 @@ void main(void) {
 		float d = length(uv - 0.5) * 1.35;
 		colour *= 1.0 - vignetteAmount * smoothstep(0.40, 1.00, d);
 
-		// Colour grade: a touch more saturation and contrast.
 		float luma = dot(colour, vec3(0.299, 0.587, 0.114));
 		colour = mix(vec3(luma), colour, 1.10);
 		colour = (colour - 0.5) * 1.05 + 0.5;

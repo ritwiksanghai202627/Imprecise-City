@@ -7,7 +7,6 @@
 namespace {
 	const float kTwoPi = 6.28318530718f;
 
-	// Deterministic hash.
 	float Hash(int a, int b, int salt) {
 		unsigned int n = static_cast<unsigned int>(a) * 374761393u + static_cast<unsigned int>(b) * 668265263u
 		               + static_cast<unsigned int>(salt) * 2147483647u;
@@ -29,7 +28,6 @@ bool City::ChooseSite(const RoadPath& road, const std::function<float(float, flo
 	float best = 1e9f;
 	bool  found = false;
 
-	// Every 10th road sample (40 m): measure how bumpy the ground is in a ring around it.
 	for (size_t i = 0; i < pts.size(); i += 10) {
 		float lo = 1e9f, hi = -1e9f;
 		for (int k = 0; k <= 8; ++k) {
@@ -62,7 +60,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 	instances.clear();
 	lampHeads.clear();
 
-	// Local axes at the road: u along the road, v to its right (same definition as RoadPath's ribbon).
 	Vector3 u = road.DirectionAt(roadDistance);
 	u.y = 0.0f;
 	const float ul = std::sqrt(u.x * u.x + u.z * u.z);
@@ -80,7 +77,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 		return std::sqrt(best);
 	};
 
-	// --- Blocks: a grid of 46 m cells, aligned with the road. Cells on the road itself stay empty.
 	const float pitch = 46.0f;
 	const int   half  = 4;
 	for (int ia = -half; ia <= half; ++ia) {
@@ -96,7 +92,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 			const float px = centre.x + u.x * a + v.x * b;
 			const float pz = centre.z + u.z * a + v.z * b;
 
-			// Keep a street (road half-width 5 + pavement) clear around the road.
 			const float clearance = 10.0f + 0.5f * std::sqrt(fx * fx + fz * fz);
 			if (distanceToRoad(px, pz) < clearance) {
 				continue;
@@ -104,8 +99,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 
 			// Tall in the middle, low at the edge, with per-building variation.
 			const float centreHeight = 20.0f + 45.0f * (1.0f - Smoothstep(0.0f, CityConst::kCityRadius, r));
-			// Whole storeys only (3.6 m each, matching the window grid in buildingFragment.glsl), so the
-			// top row of windows is never cut short into non-square slits.
 			const float wanted = std::max(10.0f, centreHeight * (0.55f + 0.9f * Hash(ia, ib, 3)));
 			const float height = std::max(3.0f, std::floor(wanted / 3.6f + 0.5f)) * 3.6f;
 
@@ -113,7 +106,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 		}
 	}
 
-	// --- Street lamps every 48 m along the whole road, alternating sides. Each lamp is a pole plus a head.
 	const float lampSpacing = 48.0f;
 	const int   lampCount   = static_cast<int>(road.GetLength() / lampSpacing);
 	for (int i = 0; i < lampCount; ++i) {
@@ -133,8 +125,6 @@ void City::Generate(const RoadPath& road, const Vector3& centre, float roadDista
 
 		instances.push_back({ x, p.y - 0.5f, z, lampYaw, 0.3f, poleHeight, 0.3f, 10.0f });
 
-		// The head is an arm reaching over the road: 1.3 m across, centred 0.55 m towards the centre line,
-		// so its far end overlaps the pole (no gap between post and lamp).
 		const float armOffset = 0.55f;
 		const float hx = x - right.x * side * (armOffset / std::fabs(side));
 		const float hz = z - right.z * side * (armOffset / std::fabs(side));

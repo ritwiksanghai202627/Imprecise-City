@@ -1,6 +1,3 @@
-// Per-frame data, uploaded once per frame into one uniform buffer (binding point 0).
-// Must match struct FrameData in Renderer.h field for field (std140 layout).
-// This block is also where time of day / season / wetness will live later.
 #define MAX_POINT_LIGHTS 8
 #define MAX_SPOT_LIGHTS  2
 

@@ -18,7 +18,6 @@ class AnimatedModel {
 public:
 	static const unsigned kMaxJoints = 128;   // must match MAX_JOINTS in skinning.glslh
 
-	// Z-up models (CesiumMan): +X is the model's front. Y-up glTF models: +Z is the front.
 	static Matrix4 ZUpFix(float scale);
 	static Matrix4 YUpFix(float scale);
 
@@ -32,8 +31,6 @@ public:
 	unsigned ClipCount() const { return (unsigned)scene.animations.size(); }
 	float    ClipDuration(unsigned clip) const;   // seconds
 
-	// Bone matrices (animated pose x inverse bind pose) for 'seconds' into the clip, looping.
-	// Frames are baked at 30 fps; neighbouring frames are blended for smooth motion at 60+ fps.
 	void Pose(unsigned clip, float seconds, std::vector<Matrix4>& out) const;
 
 private:
